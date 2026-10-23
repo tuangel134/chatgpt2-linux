@@ -25,9 +25,23 @@ CODEX_HOME = Path(os.environ.get("CODEX_HOME") or HOME / ".codex-2")
 CPA_CFG = Path(os.environ.get("CPA_DIR") or ROOT / "cliproxyapi") / "config.yaml"
 CPA_URL = "http://127.0.0.1:8317"
 OUT_DIR = CODEX_HOME / "generated_images/gemini"
+AUTH_DIR = HOME / ".cli-proxy-api"
 DEFAULT_MODEL = "gemini-3.1-flash-image"
 ASPECTS = ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "21:9"]
 MAGIC = {b"\x89PNG": ("png", "image/png"), b"\xff\xd8\xff": ("jpg", "image/jpeg"), b"RIFF": ("webp", "image/webp"), b"GIF8": ("gif", "image/gif")}
+
+
+def antigravity_accounts():
+    """Cuentas de Antigravity conectadas y activas (el proxy reparte las peticiones entre todas y salta a otra si una agota su cuota)."""
+    n = 0
+    for f in AUTH_DIR.glob("*.json"):
+        try:
+            d = json.loads(f.read_text())
+        except Exception:
+            continue
+        if d.get("type") == "antigravity" and not d.get("disabled"):
+            n += 1
+    return n
 
 
 def key():
@@ -48,14 +62,16 @@ def http(method, path, body=None, timeout=240):
         raw = e.read().decode(errors="ignore")
         raise RuntimeError(friendly_error(e.code, raw))
     except urllib.error.URLError as e:
-        raise RuntimeError(f"El hub local no responde ({e.reason}). Revisa `systemctl --user status cliproxyapi`.")
+        raise RuntimeError(f"El hub local no responde ({e.reason}). Ábrelo con el comando chatgpt2.")
 
 
 def friendly_error(code, raw):
     if code == 429 or "RESOURCE_EXHAUSTED" in raw or "model_cooldown" in raw or "exhausted" in raw.lower():
         m = re.search(r"reset after ([0-9hms. ]+?)[\".]", raw) or re.search(r'"reset_time":\s*"([^"]+)"', raw)
         when = f" Se restablece en {m.group(1).strip()}." if m else ""
-        return "Cuota agotada para este modelo de imagen en la cuenta de Antigravity." + when + " Prueba más tarde o conecta otra cuenta en Ajustes → Modelos personalizados."
+        n = antigravity_accounts()
+        quien = f"las {n} cuentas de Antigravity conectadas" if n > 1 else "la cuenta de Antigravity"
+        return f"Cuota agotada para este modelo de imagen en {quien}." + when + " Prueba más tarde o conecta otra cuenta en Ajustes → Modelos personalizados."
     if code in (401, 403):
         return "El hub rechazó la petición (sesión de Antigravity caducada). Vuelve a iniciar sesión en Ajustes → Modelos personalizados."
     if code == 400 and "not supported" in raw:

@@ -57,7 +57,7 @@ const S = {
 
 function mount(root) {
   if (!root) return;
-  let state = { providers: [], accounts: [], models: [], auto: [], autoLast: null, go: { configured: false, key_hint: "", models: [] } };
+  let state = { providers: [], accounts: [], models: [], auto: [], autoLast: null, credentials: [], routing: "round-robin", catalog: [], defaultModel: "", go: { configured: false, key_hint: "", models: [] } };
   let dirty = false;
   let msg = { text: "", err: false };
   const timers = new Set();
@@ -65,6 +65,7 @@ function mount(root) {
 
   const say = (text, err = false) => { msg = { text, err }; paintMsg(); };
   const msgEl = h("div", { style: { fontSize: "13px", minHeight: "18px" } });
+  const restartNow = h("button", { style: { ...S.primary, display: "none", alignSelf: "flex-start" }, onClick: async () => { try { await api("POST", "/restart"); say("Reiniciando…"); } catch (e) { say(e.message, true); } } }, "Reiniciar ChatGPT 2 ahora para ver los cambios");
   const paintMsg = () => { msgEl.textContent = msg.text; msgEl.style.color = msg.err ? "#ef4444" : "inherit"; msgEl.style.opacity = msg.err ? "1" : ".8"; };
 
   const accountsBox = h("div", { style: { display: "flex", flexDirection: "column", gap: "8px" } });
@@ -72,6 +73,12 @@ function mount(root) {
   const imageBox = h("div", { style: { display: "flex", flexWrap: "wrap", gap: "6px" } });
   const modelsBox = h("div", { style: { display: "flex", flexWrap: "wrap", gap: "6px" } });
   const goBox = h("div", { style: { ...S.card } });
+  const defaultSel = h("select", { style: { ...S.btn, maxWidth: "420px" }, onChange: async (e) => {
+    try { await api("PUT", "/default-model", { slug: e.target.value }); await applyNow("Modelo principal cambiado."); } catch (err) { say("Error: " + err.message, true); }
+  } });
+  const routingSel = h("select", { style: { ...S.btn }, onChange: async (e) => {
+    try { await api("PUT", "/routing", { strategy: e.target.value }); state.routing = e.target.value; await applyNow("Reparto cambiado."); } catch (err) { say("Error: " + err.message, true); }
+  } }, h("option", { value: "round-robin" }, "Repartir entre las cuentas (turnos)"), h("option", { value: "fill-first" }, "Agotar una cuenta y pasar a la siguiente"));
   const autoBox = h("div", { style: { display: "flex", flexDirection: "column", gap: "6px" } });
   const autoLastEl = h("div", { style: S.muted });
   const autoSelect = h("select", { style: { ...S.btn, alignSelf: "flex-start" }, onChange: (e) => {
@@ -82,7 +89,7 @@ function mount(root) {
   async function refresh(keepEdits) {
     try {
       const s = await api("GET", "/state");
-      state.accounts = s.accounts; state.models = s.models; state.autoLast = s.auto_last || null; state.go = s.opencode_go || state.go;
+      state.accounts = s.accounts; state.models = s.models; state.autoLast = s.auto_last || null; state.go = s.opencode_go || state.go; state.credentials = s.credentials || []; state.routing = s.routing || "round-robin"; state.catalog = s.catalog || []; state.defaultModel = s.default_model || "";
       if (!keepEdits) { state.providers = s.providers.map((p) => ({ ...p, orig_name: p.name })); state.auto = s.auto || []; }
       paint();
     } catch (e) {
@@ -91,17 +98,30 @@ function mount(root) {
   }
 
   function paint() {
-    // cuentas
+    // cuentas (varias por servicio: el proxy reparte el uso entre ellas)
+    const PROV = { antigravity: "Antigravity (Gemini)", claude: "Claude", codex: "ChatGPT" };
+    const pill = (txt, color) => h("span", { style: { border: BORDER, borderRadius: "999px", padding: "1px 9px", fontSize: "11px", color: color || "inherit" } }, txt);
+    const when = (c) => { const t = c.cooldowns && c.cooldowns[0]; return t ? new Date(typeof t === "object" ? (t.until || t.reset_at || t.time || Date.now()) : t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : ""; };
+    const counts = {};
+    for (const c of state.credentials) counts[c.type] = (counts[c.type] || 0) + (c.disabled ? 0 : 1);
+    const stateOf = (c) => c.disabled ? pill("Pausada", "#f59e0b")
+      : c.cooldowns && c.cooldowns.length ? pill("En espera" + (when(c) ? " hasta " + when(c) : ""), "#f59e0b")
+      : c.unavailable ? pill("No disponible", "#ef4444") : pill("Activa", "#22c55e");
     accountsBox.replaceChildren(
-      ...(state.accounts.length
-        ? state.accounts.map((a) =>
-            h("div", { style: { display: "flex", alignItems: "center", gap: "10px", justifyContent: "space-between" } },
-              h("div", {}, h("b", {}, a.type), "  ", h("span", { style: S.muted }, a.email)),
-              h("button", { style: S.btn, onClick: async () => {
-                if (!confirm("¿Quitar la cuenta " + (a.email || a.type) + "?")) return;
-                await api("DELETE", "/account/" + encodeURIComponent(a.file)); await applyNow("Cuenta eliminada."); }, }, "Quitar")))
+      ...(state.credentials.length
+        ? state.credentials.map((a) =>
+            h("div", { style: { display: "flex", flexWrap: "wrap", alignItems: "center", gap: "10px", justifyContent: "space-between", border: BORDER, borderRadius: "10px", padding: "8px 12px", background: CARD, opacity: a.disabled ? ".6" : "1" } },
+              h("div", { style: { display: "flex", flexDirection: "column", gap: "3px", minWidth: "0" } },
+                h("div", { style: { display: "flex", gap: "8px", alignItems: "center", flexWrap: "wrap" } }, h("b", {}, PROV[a.type] || a.type), h("span", { style: S.muted }, a.email), stateOf(a)),
+                h("div", { style: S.muted }, "Uso (peticiones): última hora " + a.ok_1h + " ok / " + a.fail_1h + " fallos · últimas ~3 h " + a.ok_3h + " ok / " + a.fail_3h + " fallos" + (a.status_message ? " · " + a.status_message : ""))),
+              h("div", { style: { display: "flex", gap: "8px" } },
+                h("button", { style: S.btn, onClick: async () => { try { await api("POST", "/account-status", { name: a.file, disabled: !a.disabled }); await refresh(true); say(a.disabled ? "Cuenta reanudada." : "Cuenta pausada: no recibirá peticiones."); } catch (e) { say("Error: " + e.message, true); } } }, a.disabled ? "Reanudar" : "Pausar"),
+                h("button", { style: S.btn, onClick: async () => {
+                  if (!confirm("¿Quitar la cuenta " + (a.email || a.type) + "?")) return;
+                  await api("DELETE", "/account/" + encodeURIComponent(a.file)); await applyNow("Cuenta eliminada."); } }, "Quitar"))))
         : [h("div", { style: S.muted }, "Aún no hay cuentas conectadas.")]),
-    );
+      ...(Object.entries(counts).some(([, n]) => n > 1) ? [] : state.credentials.length ? [h("div", { style: S.muted }, "Tip: conecta una segunda cuenta del mismo servicio con los botones de abajo y el uso se reparte entre las dos (y si una agota su cuota, sigue la otra).")] : []));
+    routingSel.value = state.routing;
     // modelos disponibles
     modelsBox.replaceChildren(...state.models.map((m) => h("span", { style: { border: BORDER, borderRadius: "999px", padding: "2px 10px", fontSize: "12px" } }, m)));
     const imgs = state.models.filter((m) => /image/i.test(m));
@@ -110,6 +130,8 @@ function mount(root) {
     provBox.replaceChildren(...state.providers.map(providerCard));
     paintGo();
     paintAuto();
+    defaultSel.replaceChildren(...state.catalog.map((m) => h("option", { value: m.slug }, m.name)));
+    if (state.defaultModel) defaultSel.value = state.defaultModel;
   }
 
   function paintGo() {
@@ -123,13 +145,22 @@ function mount(root) {
     goBox.replaceChildren(
       state.go.configured
         ? h("div", { style: { display: "flex", flexWrap: "wrap", gap: "10px", alignItems: "center", justifyContent: "space-between" } },
-            h("div", {}, h("b", {}, "OpenCode Go conectado"), "  ", h("span", { style: S.muted }, "clave " + state.go.key_hint + " · " + state.go.models.length + " modelos expuestos (prefijo go-)")),
+            h("div", {}, h("b", {}, "OpenCode Go conectado"), "  ", h("span", { style: S.muted }, "clave " + state.go.key_hint + " · " + state.go.models.length + " modelos expuestos (prefijo go-) · se actualiza solo cada día" + (state.go.updated ? " · última vez: " + new Date(state.go.updated * 1000).toLocaleString() : ""))),
             h("div", { style: { display: "flex", gap: "8px" } },
-              h("button", { style: S.btn, onClick: () => applyNow("Lista de modelos actualizada.") }, "Actualizar modelos"),
+              h("button", { style: S.btn, onClick: async () => {
+                say("Consultando la lista de OpenCode Go…");
+                try {
+                  const r = await api("POST", "/opencode-go/refresh");
+                  await refresh(true);
+                  const ch = r.added.length || r.removed.length;
+                  say("Lista actualizada: " + r.total + " modelos" + (ch ? " (nuevos: " + (r.added.join(", ") || "ninguno") + " · retirados: " + (r.removed.join(", ") || "ninguno") + ")." : ", sin cambios."));
+                  if (ch) restartNow.style.display = "inline-block";
+                } catch (e) { say("Error: " + e.message, true); }
+              } }, "Actualizar modelos"),
               h("button", { style: S.btn, onClick: async () => { if (!confirm("¿Quitar la clave de OpenCode Go?")) return; await api("DELETE", "/opencode-go"); await applyNow("OpenCode Go desconectado."); } }, "Quitar")))
         : h("div", { style: { display: "flex", flexWrap: "wrap", gap: "10px", alignItems: "flex-end" } },
             field("Clave API de OpenCode Go", key, "2 1 300px"), h("button", { style: S.primary, onClick: connect }, "Conectar OpenCode Go")),
-      h("div", { style: S.muted }, "Con tu suscripción Go (o Go Plus) se exponen todos sus modelos: GLM, Kimi, DeepSeek, Qwen, MiniMax, MiMo, GPT, Grok, Claude Haiku, Gemini… La lista se consulta a OpenCode al aplicar. Cada modelo usa el protocolo que le corresponde (chat, responses, Anthropic o Google) sin que tengas que configurar nada."),
+      h("div", { style: S.muted }, "Con tu suscripción Go (o Go Plus) se exponen todos sus modelos: GLM, Kimi, DeepSeek, Qwen, MiniMax, MiMo, GPT, Grok, Claude Haiku, Gemini… La lista se consulta a OpenCode al aplicar. Cada modelo usa el protocolo que le corresponde (chat, responses, Anthropic o Google) sin que tengas que configurar nada. Algunos modelos (DeepSeek, Gemini 4 Argon, Muse Spark) exigen cambiar la privacidad de tu workspace en la consola de OpenCode («Global» como región, o permitir endpoints que entrenan con tus datos): si uno falla con ese aviso, es eso."),
       ...(chips.length ? [h("div", { style: { display: "flex", flexWrap: "wrap", gap: "6px" } }, ...chips)] : []));
   }
 
@@ -180,7 +211,7 @@ function mount(root) {
     try {
       const r = await api("POST", "/apply");
       await refresh(true);
-      say((okText ? okText + " " : "") + "Listo: " + r.models + " modelos. Pulsa «Reiniciar ChatGPT 2» para verlos en el selector.");
+      say((okText ? okText + " " : "") + "Listo: " + r.models + " modelos. Reinicia ChatGPT 2 para verlos en el selector."); restartNow.style.display = "inline-block";
     } catch (e) { say("Error: " + e.message, true); }
   }
 
@@ -196,7 +227,7 @@ function mount(root) {
   }
 
   function loginButton([kind, label]) {
-    const b = h("button", { style: S.btn }, "Iniciar sesión con " + label);
+    const b = h("button", { style: S.btn }, "+ Conectar cuenta de " + label);
     b.addEventListener("click", async () => {
       b.disabled = true;
       try {
@@ -232,13 +263,20 @@ function mount(root) {
         h("div", { style: S.muted }, "Todo pasa por el hub local de este clon: los modelos usan las herramientas de Codex (shell, edición de archivos, plugins) como si fueran nativos.")),
       h("section", { style: { display: "flex", flexDirection: "column", gap: "10px" } },
         h("h2", { style: S.h2 }, "Cuentas conectadas"), accountsBox,
-        h("div", { style: { display: "flex", flexWrap: "wrap", gap: "8px" } }, ...LOGINS.map(loginButton))),
+        h("div", { style: { display: "flex", flexWrap: "wrap", gap: "8px", alignItems: "center" } }, ...LOGINS.map(loginButton)),
+        h("div", { style: { display: "flex", flexWrap: "wrap", gap: "8px", alignItems: "center" } }, h("span", { style: S.muted }, "Con varias cuentas del mismo servicio (también para imágenes):"), routingSel),
+        h("div", { style: S.muted }, "Puedes conectar todas las cuentas que quieras de cada servicio: pulsa otra vez el botón de inicio de sesión con otra cuenta. El proxy elige la cuenta de cada petición según el reparto y, si una agota su cuota o falla, usa otra automáticamente. «Pausar» deja una cuenta fuera sin borrarla.")),
       h("section", { style: { display: "flex", flexDirection: "column", gap: "10px" } },
         h("h2", { style: S.h2 }, "OpenCode Go"), goBox),
       h("section", { style: { display: "flex", flexDirection: "column", gap: "10px" } },
         h("h2", { style: S.h2 }, "Proveedores con API (URL base + clave)"), provBox, h("div", {}, tplSelect)),
       h("section", { style: { display: "flex", flexDirection: "column", gap: "10px" } },
         h("h2", { style: S.h2 }, "Modelos disponibles ahora"), modelsBox),
+      h("section", { style: { display: "flex", flexDirection: "column", gap: "8px" } },
+        h("h2", { style: S.h2 }, "Modelo principal por defecto"),
+        h("div", { style: S.muted }, "El que se usa al abrir un chat nuevo. Al conectar OpenCode Go se pone DeepSeek V4.1 Flash; aquí puedes cambiarlo."),
+        defaultSel,
+      ),
       h("section", { style: { display: "flex", flexDirection: "column", gap: "8px" } },
         h("h2", { style: S.h2 }, "AUTO · cambia de modelo solo"),
         h("div", { style: S.muted }, "Aparece como un modelo más («AUTO») en el selector de Codex. Usa el primero de esta lista; si falla o se queda sin cuota o límite, pasa solo al siguiente (y lo vuelve a probar pasados unos minutos). Solo cambia antes de que el modelo empiece a responder: una respuesta ya empezada no se interrumpe. Al cambiar de modelo se descarta el razonamiento cifrado del anterior."),
@@ -250,7 +288,7 @@ function mount(root) {
         h("button", { style: S.primary, onClick: save }, "Guardar y aplicar"),
         h("button", { style: S.btn, onClick: async () => { try { await api("POST", "/restart"); say("Reiniciando…"); } catch (e) { say(e.message, true); } } }, "Reiniciar ChatGPT 2"),
         h("button", { style: S.btn, onClick: () => refresh(false) }, "Recargar")),
-      msgEl));
+      msgEl, restartNow));
 
   refresh(false);
   return () => { dead = true; timers.forEach(clearInterval); };

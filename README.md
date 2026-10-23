@@ -19,6 +19,7 @@ Conecta Antigravity (Gemini), Claude, ChatGPT o cualquier API compatible con Ope
 4. [Instalación](#instalación)
 5. [Primer inicio (inicio de sesión)](#primer-inicio-inicio-de-sesión)
 6. [Tutorial: conectar tus modelos](#tutorial-conectar-tus-modelos)
+   - [Varias cuentas por servicio](#varias-cuentas-por-servicio)
    - [OpenCode Go](#opencode-go-todos-sus-modelos-con-una-clave)
    - [Modo AUTO](#modo-auto-cambia-de-modelo-solo)
 7. [Modo «ChatGPT Web»](#modo-chatgpt-web)
@@ -162,7 +163,7 @@ Todo se hace desde la propia app: **Ajustes → Modelos personalizados**.
 ### 1. Conectar una cuenta (Antigravity, Claude o ChatGPT)
 
 1. Abre **Ajustes → Modelos personalizados**.
-2. En **Cuentas conectadas** pulsa el botón del servicio: *Iniciar sesión con Antigravity (Gemini)*, *…con Claude* o *…con ChatGPT*.
+2. En **Cuentas conectadas** pulsa el botón del servicio: *+ Conectar cuenta de Antigravity (Gemini)*, *…de Claude* o *…de ChatGPT*.
 3. Se abre tu navegador con la pantalla de inicio de sesión del servicio. Entra con **tu** cuenta y acepta.
 4. Vuelve a la app: la cuenta aparece en la lista. Las credenciales quedan en `~/.cli-proxy-api/` (solo tu usuario).
 5. Pulsa **Guardar y aplicar**. Los modelos de esa cuenta aparecen en *Modelos disponibles ahora*.
@@ -193,6 +194,17 @@ Sirve para cualquier servicio compatible con la API de OpenAI (OpenRouter, un se
 
 En la misma pantalla: **Quitar** junto a la cuenta, o **Quitar proveedor** en el proveedor, y luego **Guardar y aplicar**.
 
+### Varias cuentas por servicio
+
+Puedes conectar **todas las cuentas que quieras** de Antigravity, Claude y ChatGPT: vuelve a pulsar el botón *+ Conectar cuenta de…* e inicia sesión con otra cuenta. El proxy las usa en conjunto:
+
+- **Repartir entre las cuentas (turnos)**, por defecto: cada petición va a una cuenta distinta, así el uso se reparte entre todas. **Agotar una cuenta y pasar a la siguiente**: usa una hasta que se queda sin cuota y entonces sigue con la otra. Se cambia en el selector bajo la lista de cuentas.
+- Si una cuenta agota su cuota o falla, la petición se reintenta **con otra cuenta** automáticamente, sin que lo notes.
+- Cada cuenta muestra su **estado** (*Activa*, *En espera* si está enfriándose tras agotar la cuota, *Pausada*, *No disponible*) y su **uso**: peticiones correctas y fallidas de la última hora y de las últimas ~3 horas.
+- **Pausar** deja una cuenta fuera sin borrarla (y **Reanudar** la devuelve); **Quitar** la borra.
+- La **generación de imágenes** (`generate_image`, Gemini) usa el mismo reparto: con varias cuentas de Antigravity, si una agota la cuota de imágenes pasa a otra. Si se agotan todas, el aviso indica cuántas cuentas hay y cuándo se restablece.
+- Las cuentas se reconocen por su correo: volver a iniciar sesión con la misma cuenta la actualiza, no la duplica.
+
 ### OpenCode Go: todos sus modelos con una clave
 
 [OpenCode Go](https://opencode.ai/docs/go/) es una suscripción con una sola clave API que da acceso a muchos modelos. Aquí se conecta con un solo paso y **se exponen todos los que ofrezca en ese momento**.
@@ -207,6 +219,8 @@ Cómo funciona por dentro:
 - Cada modelo usa el protocolo que le corresponde y el proxy se encarga de traducirlo: chat (`/openai/v1/chat/completions`), Responses (`/openai/v1/responses`), Anthropic (`/anthropic/v1/messages`) o Google (`/google/v1beta/models/…`). Los modelos nuevos que OpenCode añada y que no estén en la documentación se tratan por familia (`gpt-`, `grok-`, `muse-` → Responses; `claude-`, `qwen` → Anthropic; `gemini-` → Google; el resto → chat).
 - La clave se guarda con permisos `0600` y la pantalla solo muestra los últimos 4 caracteres. Usa tus límites de Go: con *Extra usage* activado en la consola, Go pasa a tu saldo al agotar el límite.
 - Contexto e imágenes de cada modelo son aproximaciones por familia (OpenCode no publica esos datos en su lista).
+- OpenCode Go exige un **identificador de sesión estable por conversación** (`x-opencode-session`) y un User-Agent propio. El enrutador local lo calcula a partir de la sesión que manda Codex y el proxy lo reenvía (User-Agent: `chatgpt2-linux/1.0`).
+- Probado con tu suscripción, con una herramienta de Codex (llamada a función) en cada modelo: **30 de los 36 modelos la ejecutan** correctamente. Los demás fallan por ajustes de tu workspace, no del hub: **DeepSeek V4.1 Flash y V4 Pro** piden región *Global*; **Gemini 4 Argon Contributor** y **Muse Spark 1.2 y 1.3** piden permitir endpoints que entrenan con tus datos (ambos ajustes se cambian en *Privacy* de la consola de OpenCode, y es decisión tuya). **LongCat-2.0** estaba temporalmente sin endpoint y **MiMo-V2.5-Pro** respondía «modelo no soportado».
 - Puedes meter estos modelos en **AUTO** (siguiente sección) para que, si uno agota su límite, siga con otro.
 
 ### Modo AUTO: cambia de modelo solo
@@ -364,6 +378,7 @@ chatgpt2-linux/
 │   ├── gemini_media_mcp.py         herramienta generate_image
 │   ├── tests/test_auto_router.py   pruebas del enrutador (proxy falso, sin cuentas)
 │   ├── tests/test_opencode_go.py   OpenCode Go de punta a punta con un servidor falso y CLIProxyAPI real
+│   ├── tests/test_accounts.py      varias cuentas: estado, uso, pausar y reparto (cuentas falsas, CLIProxyAPI real)
 │   └── restart-clone.sh            botón «Reiniciar» de Ajustes
 ├── mastermcp/              Master MCP (host.cjs compilado + fuentes TypeScript + pruebas)
 └── docs/img/               capturas

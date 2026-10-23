@@ -17,6 +17,9 @@ import urllib.request
 BASE = (os.environ.get("OPENCODE_GO_BASE") or "https://opencode.ai/inference/go").rstrip("/")
 PREFIX = "go-"  # los alias llevan este prefijo para no chocar con otros proveedores (p. ej. beam-free de OpenCode Free)
 PROVIDER = "OpenCode Go"
+# OpenCode Go exige un id de sesión estable por conversación (x-opencode-session) y un User-Agent propio. El enrutador local
+# lo calcula a partir de la cabecera session_id de Codex y CLIProxyAPI lo copia a la petición saliente ("$cabecera").
+HEADERS = {"x-opencode-session": "$x-opencode-session", "User-Agent": "chatgpt2-linux/1.0"}
 
 # Protocolo de cada modelo según la documentación de OpenCode Go; el resto se deduce por familia (ver protocol()).
 EXACT = {
@@ -41,7 +44,7 @@ def protocol(mid):
         return EXACT[mid]
     if mid.startswith(("gpt-", "grok-", "muse-")):
         return "responses"
-    if mid.startswith(("claude-", "qwen")):
+    if mid.startswith(("claude-", "qwen", "minimax-m2")):  # minimax-m2.x: lo confirmó una prueba real («protocolo no soportado» por chat)
         return "anthropic"
     if mid.startswith("gemini-"):
         return "google"
@@ -83,20 +86,37 @@ def pretty(mid):
     return " ".join(WORDS.get(w.lower(), w[:1].upper() + w[1:]) for w in mid.replace("-", " ").split())
 
 
-def fetch_ids(timeout=10):
-    try:
-        with urllib.request.urlopen(urllib.request.Request(BASE + "/v1/models", headers={"User-Agent": "chatgpt2-modelhub"}), timeout=timeout) as r:
-            ids = [m["id"] for m in json.load(r).get("data", []) if m.get("id")]
-        if ids:
-            return ids
-    except Exception:
-        pass
+def fetch_ids(timeout=10, cache=None, strict=False):
+    """Lista pública de modelos. Si falla, la última lista buena guardada en disco; y si no hay, la documentada."""
+    last = None
+    for _ in range(2):
+        try:
+            with urllib.request.urlopen(urllib.request.Request(BASE + "/v1/models", headers={"User-Agent": "chatgpt2-modelhub"}), timeout=timeout) as r:
+                ids = [m["id"] for m in json.load(r).get("data", []) if m.get("id")]
+            if ids:
+                if cache:
+                    try:
+                        cache.write_text(json.dumps(ids))
+                    except OSError:
+                        pass
+                return ids
+        except Exception as e:
+            last = e
+    if strict:  # el botón y la actualización diaria necesitan saber si realmente se pudo consultar
+        raise last or RuntimeError("lista vacía")
+    if cache:
+        try:
+            ids = json.loads(cache.read_text())
+            if ids:
+                return ids
+        except Exception:
+            pass
     return list(FALLBACK)
 
 
-def entries(ids=None):
+def entries(ids=None, cache=None):
     out = []
-    for mid in ids or fetch_ids():
+    for mid in ids or fetch_ids(cache=cache):
         ctx, image = meta(mid)
         out.append({"name": mid, "alias": PREFIX + mid, "display": pretty(mid), "context": ctx, "image": image,
                     "proto": protocol(mid), "gpt": mid.startswith("gpt-")})
@@ -112,7 +132,7 @@ def chat_provider(api_key, ents):
     models = [e for e in ents if e["proto"] == "chat"]
     if not (api_key and models):
         return None
-    return {"name": PROVIDER, "base_url": BASE + "/openai/v1", "api_key": api_key,
+    return {"name": PROVIDER, "base_url": BASE + "/openai/v1", "api_key": api_key, "headers": HEADERS,
             "models": [{"name": e["name"], "alias": e["alias"], "display": e["display"], "context": e["context"], "image": e["image"]} for e in models]}
 
 
@@ -124,8 +144,12 @@ def cpa_groups(api_key, ents):
         models = [e for e in ents if e["proto"] == proto]
         if not models:
             continue
-        lines += [f"  {ptype}:", f"    - name: {_q('opencode-go-' + proto)}", f"      base-url: {_q(BASE + path)}",
-                  "      keys:", f"        - api-key: {_q(api_key)}", "      models:"]
+        lines += [f"  {ptype}:", f"    - name: {_q('opencode-go-' + proto)}", f"      base-url: {_q(BASE + path)}", "      headers:"]
+        lines += [f"        {_q(k)}: {_q(v)}" for k, v in HEADERS.items()]
+        lines += ["      keys:", f"        - api-key: {_q(api_key)}"]
+        if ptype == "codex":
+            lines.append("          disable-codex-cloaking: true")  # que se vea nuestro User-Agent, no uno de Codex inventado
+        lines.append("      models:")
         for e in models:
             lines += [f"        - name: {_q(e['name'])}", f"          alias: {_q(e['alias'])}", f"          display-name: {_q(e['display'])}",
                       f"          max-context-length: {int(e['context'])}"]

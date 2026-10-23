@@ -48,15 +48,16 @@ class Fake(BaseHTTPRequestHandler):
         except ValueError:
             j = {}
         seen.append({"path": self.path, "auth": self.headers.get("Authorization", ""), "xkey": self.headers.get("x-api-key", ""),
-                     "goog": self.headers.get("x-goog-api-key", ""), "model": j.get("model")})
+                     "goog": self.headers.get("x-goog-api-key", ""), "model": j.get("model"),
+                     "sess": self.headers.get("x-opencode-session", ""), "ua": self.headers.get("User-Agent", "")})
         out = b'{"error":{"message":"fake upstream"}}'
-        self.send_response(500); self.send_header("Content-Type", "application/json"); self.send_header("Content-Length", str(len(out)))
+        self.send_response(400); self.send_header("Content-Type", "application/json"); self.send_header("Content-Length", str(len(out)))
         self.end_headers(); self.wfile.write(out)
 
 
-def post(path, payload):
+def post(path, payload, sess="sesion-prueba-1"):
     c = http.client.HTTPConnection("127.0.0.1", CPA, timeout=30)
-    c.request("POST", path, json.dumps(payload), {"Authorization": "Bearer " + m.cpa_key(), "Content-Type": "application/json"})
+    c.request("POST", path, json.dumps(payload), {"Authorization": "Bearer " + m.cpa_key(), "Content-Type": "application/json", "x-opencode-session": sess})
     r = c.getresponse()
     return r.status, r.read()
 
@@ -100,6 +101,48 @@ class OpenCodeGo(unittest.TestCase):
         self.assertEqual(cat["go-kimi-k3"]["display_name"], "Kimi K3 (OpenCode Go)")
         self.assertIn("xhigh", [l["effort"] for l in cat["go-gpt-6-luna"]["supported_reasoning_levels"]])
         self.assertNotIn("xhigh", [l["effort"] for l in cat["go-glm-5.3"]["supported_reasoning_levels"]])
+
+    def test_sesion_y_user_agent_llegan_a_todos_los_protocolos(self):
+        for model, path in [("go-glm-5.3", "/v1/chat/completions"), ("go-gpt-6-luna", "/v1/responses"),
+                            ("go-claude-haiku-5-5", "/v1/chat/completions"), ("go-gemini-4-argon-contributor", "/v1/chat/completions")]:
+            seen.clear()
+            body = {"model": model, "input": "hola"} if path.endswith("responses") else {"model": model, "messages": [{"role": "user", "content": "hola"}]}
+            post(path, body, sess="mi-conversacion-42")
+            self.assertTrue(seen, model)
+            self.assertEqual(seen[-1]["sess"], "mi-conversacion-42", model)
+            self.assertIn("chatgpt2-linux", seen[-1]["ua"], model)
+
+    def test_actualizar_detecta_nuevos_y_retirados(self):
+        calls = []
+        real_apply = m.apply_all
+        m.apply_all = lambda *a, **k: calls.append(1) or 0
+        old = list(MODELS)
+        try:
+            m.save_state({"providers": [], "auto": {"models": []}, "opencode_go": {"api_key": KEY}})
+            (TMP / "data/opencode-go-models.json").write_text(json.dumps(MODELS))
+            r = m.go_refresh()
+            self.assertEqual((r["added"], r["removed"], calls), ([], [], []))          # sin cambios: no reinicia nada
+            MODELS.remove("kimi-k3"); MODELS.append("glm-9")                            # OpenCode retira uno y añade otro
+            r = m.go_refresh()
+            self.assertEqual((r["added"], r["removed"], len(calls)), (["glm-9"], ["kimi-k3"], 1))
+            self.assertGreater(m.load_state()["opencode_go"]["updated"], 0)
+            self.assertEqual(m.load_state()["opencode_go"]["api_key"], KEY)             # no pierde la clave
+        finally:
+            m.apply_all = real_apply
+            MODELS[:] = old
+
+    def test_modelo_principal_forzado_en_config(self):
+        m.CODEX_TOML = TMP / "data/config.toml"
+        m.CATALOG = TMP / "data/hub-models.json"
+        m.CODEX_TOML.write_text('model = "otro"\n\n[desktop]\nx = 1\n')
+        m.CATALOG.write_text(json.dumps({"models": [{"slug": "go-deepseek-v4.1-flash"}, {"slug": "otro"}]}))
+        m.patch_toml("otro", force_model="go-deepseek-v4.1-flash")
+        t = m.CODEX_TOML.read_text()
+        self.assertIn('model = "go-deepseek-v4.1-flash"', t)
+        self.assertNotIn('model = "otro"', t)
+        self.assertIn("[desktop]", t)
+        m.patch_toml("otro")  # sin forzar: respeta la elección actual si sigue en el catálogo
+        self.assertIn('model = "go-deepseek-v4.1-flash"', m.CODEX_TOML.read_text())
 
     def test_chat(self):
         post("/v1/chat/completions", {"model": "go-glm-5.3", "messages": [{"role": "user", "content": "hola"}]})

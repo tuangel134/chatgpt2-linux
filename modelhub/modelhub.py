@@ -32,10 +32,12 @@ CPA_CFG = CPA_DIR / "config.yaml"
 AUTH_DIR = HOME / ".cli-proxy-api"
 STATE = CODEX_HOME / "hub-providers.json"
 TOKEN_FILE = CODEX_HOME / "hub-token"
+MGMT_FILE = CODEX_HOME / "cpa-mgmt-key"  # clave de gestión local del proxy (solo la usa el hub, por loopback)
 CATALOG = CODEX_HOME / "hub-models.json"
 CODEX_TOML = CODEX_HOME / "config.toml"
 PORT = 8318
 CPA_PORT = 8317
+DEFAULT_GO_MODEL = "go-deepseek-v4.1-flash"  # modelo principal por defecto cuando se conecta OpenCode Go
 ROUTER_PORT = 8323  # enrutador local (AUTO y saneado de cápsulas); solo escucha en 127.0.0.1
 CPA_PID = CODEX_HOME / "cliproxyapi.pid"
 LOGIN_FLAGS = {"codex": "-codex-login", "claude": "-claude-login", "antigravity": "-antigravity-login"}
@@ -51,6 +53,22 @@ def read_token():
         TOKEN_FILE.write_text(secrets.token_hex(24))
         TOKEN_FILE.chmod(0o600)
     return TOKEN_FILE.read_text().strip()
+
+
+def mgmt_key():
+    CODEX_HOME.mkdir(parents=True, exist_ok=True)
+    if not MGMT_FILE.exists():
+        MGMT_FILE.write_text(secrets.token_hex(24))
+        MGMT_FILE.chmod(0o600)
+    return MGMT_FILE.read_text().strip()
+
+
+STRATEGIES = ("round-robin", "fill-first")
+
+
+def strategy(st):
+    s = (st.get("routing") or {}).get("strategy")
+    return s if s in STRATEGIES else "round-robin"
 
 
 def cpa_key():
@@ -93,8 +111,45 @@ def go_entries(st, refresh=False):
     if not go_key(st):
         return []
     if refresh or time.time() - _go_cache["at"] > 300 or not _go_cache["ents"]:
-        _go_cache.update({"at": time.time(), "ents": ocgo.entries()})
+        _go_cache.update({"at": time.time(), "ents": ocgo.entries(cache=CODEX_HOME / "opencode-go-models.json")})
     return _go_cache["ents"]
+
+
+def go_refresh():
+    """Vuelve a pedir la lista de modelos de OpenCode Go y, si OpenCode añadió o retiró alguno, regenera catálogo y proxy."""
+    st = load_state()
+    if not go_key(st):
+        return None
+    cache = CODEX_HOME / "opencode-go-models.json"
+    try:
+        old = set(json.loads(cache.read_text()))
+    except Exception:
+        old = {e["name"] for e in _go_cache["ents"]}
+    try:
+        ids = ocgo.fetch_ids(cache=cache, strict=True)
+    except Exception as e:
+        raise RuntimeError("No se pudo consultar la lista de OpenCode Go (%s)" % e)
+    added, removed = sorted(set(ids) - old), sorted(old - set(ids))
+    _go_cache.update({"at": time.time(), "ents": ocgo.entries(ids)})
+    st = load_state()
+    st["opencode_go"] = {**st.get("opencode_go", {}), "updated": int(time.time()), "last_diff": {"added": added, "removed": removed}}
+    save_state(st)
+    if added or removed:
+        apply_all()
+    return {"added": added, "removed": removed, "total": len(ids), "updated": st["opencode_go"]["updated"]}
+
+
+def go_daily():
+    """Hilo: una vez al día (y al arrancar si la última vez fue hace más de 24 h) actualiza la lista de OpenCode Go."""
+    time.sleep(45)
+    while True:
+        try:
+            st = load_state()
+            if go_key(st) and time.time() - (st.get("opencode_go") or {}).get("updated", 0) > 86400:
+                go_refresh()
+        except Exception as e:
+            print("actualización diaria de OpenCode Go:", e, file=sys.stderr)
+        time.sleep(1800)
 
 
 def write_cpa_config(st):
@@ -105,11 +160,14 @@ def write_cpa_config(st):
         f"  port: {CPA_PORT}",
         "management:",
         "  allow-remote: false",
+        f"  secret-key: {yq(mgmt_key())}",
         "access:",
         "  api-keys:",
         f"    - {yq(cpa_key())}",
         "oauth:",
         '  auth-dir: "~/.cli-proxy-api"',
+        "routing:",
+        f"  strategy: {yq(strategy(st))}",
     ]
     provs = [p for p in st["providers"] if not p.get("disabled") and p.get("models")]
     gents = go_entries(st)
@@ -120,6 +178,9 @@ def write_cpa_config(st):
         lines.append("openai-compatibility:")
         for p in provs:
             lines += [f"  - name: {yq(p['name'])}", f"    base-url: {yq(p['base_url'])}"]
+            if p.get("headers"):
+                lines.append("    headers:")
+                lines += [f"      {yq(k)}: {yq(v)}" for k, v in p["headers"].items()]
             if p.get("api_key"):
                 lines += ["    api-key-entries:", f"      - api-key: {yq(p['api_key'])}"]
             lines.append("    models:")
@@ -174,6 +235,21 @@ def restart_proxy():
         if cpa_alive():
             break
         time.sleep(0.25)
+
+
+def wait_models_stable(max_s=25):
+    """Tras reiniciar el proxy las cuentas OAuth se cargan poco a poco: espera a que la lista de modelos deje de crecer."""
+    last, same, end = -1, 0, time.time() + max_s
+    while time.time() < end:
+        try:
+            n = len(cpa_models())
+        except Exception:
+            n = -1
+        same = same + 1 if n == last and n > 0 else 0
+        if same >= 3:
+            return
+        last = n
+        time.sleep(1)
 
 
 def cpa_models():
@@ -293,7 +369,7 @@ def auto_entry(st, catalog):
     return entry
 
 
-def patch_toml(first_model, use_router=True):
+def patch_toml(first_model, use_router=True, force_model=None):
     s = CODEX_TOML.read_text() if CODEX_TOML.exists() else ""
     if s.startswith("["):
         s = "\n" + s
@@ -315,7 +391,10 @@ def patch_toml(first_model, use_router=True):
         ids = [m["slug"] for m in json.loads(CATALOG.read_text())["models"]]
     except Exception:
         pass
-    if not cur or (ids and cur.group(1) not in ids):
+    if force_model:  # el usuario pidió este modelo como principal
+        head = re.sub(r"(?m)^model = .*\n", "", head)
+        model_line = f'model = "{force_model}"\n'
+    elif not cur or (ids and cur.group(1) not in ids):
         head = re.sub(r"(?m)^model = .*\n", "", head)
         if first_model:
             model_line = f'model = "{first_model}"\n'
@@ -347,11 +426,66 @@ def apply_all(restart_cpa=True):
     write_cpa_config(st)
     if restart_cpa:
         restart_proxy()
+        wait_models_stable()
     cat = build_catalog(st)
     CATALOG.write_text(json.dumps({"models": cat}, indent=2, ensure_ascii=False))
-    patch_toml(cat[0]["slug"] if cat else None, use_router=True)
+    slugs = [m["slug"] for m in cat]
+    dm = st.get("default_model") or {}
+    if go_key(st) and not dm:  # primera vez con OpenCode Go conectado: DeepSeek V4.1 Flash como principal
+        dm = {"slug": DEFAULT_GO_MODEL, "pending": True}
+    force = dm["slug"] if dm.get("pending") and dm.get("slug") in slugs else None
+    first = DEFAULT_GO_MODEL if DEFAULT_GO_MODEL in slugs else (slugs[0] if slugs else None)
+    patch_toml(first, use_router=True, force_model=force)
+    if dm and (force or dm != st.get("default_model")):
+        st2 = load_state()
+        st2["default_model"] = {"slug": dm["slug"], "pending": False if force else bool(dm.get("pending"))}
+        save_state(st2)
     ensure_mcp()
     return len(cat)
+
+
+def mgmt(method, path, body=None, timeout=8):
+    req = urllib.request.Request(f"http://127.0.0.1:{CPA_PORT}/v8/management{path}", method=method,
+                                 data=None if body is None else json.dumps(body).encode(),
+                                 headers={"X-Management-Key": mgmt_key(), "Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return json.load(r)
+
+
+def credentials():
+    """Cuentas conectadas con su estado y uso reciente (API de gestión del proxy); sin proxy, solo lo que hay en disco."""
+    try:
+        out = []
+        for f in mgmt("GET", "/credentials").get("files", []):
+            if f.get("runtime_only") or f.get("source") != "file":
+                continue
+            rec = f.get("recent_requests") or []
+            last = rec[-6:]  # ~ última hora (cubos de 10 min)
+            cool = [c for c in (f.get("cooldowns") or []) if c]
+            out.append({
+                "file": f.get("name") or f.get("id"), "type": f.get("provider") or f.get("type"), "email": f.get("email") or f.get("label") or "",
+                "disabled": bool(f.get("disabled")), "unavailable": bool(f.get("unavailable")), "status": f.get("status") or "",
+                "status_message": f.get("status_message") or "", "cooldowns": cool,
+                "ok_1h": sum(r.get("success", 0) for r in last), "fail_1h": sum(r.get("failed", 0) for r in last),
+                "ok_3h": sum(r.get("success", 0) for r in rec), "fail_3h": sum(r.get("failed", 0) for r in rec),
+                "ok_total": f.get("success", 0), "fail_total": f.get("failed", 0)})
+        return out
+    except Exception:
+        return [{**a, "disabled": False, "unavailable": False, "status": "", "status_message": "", "cooldowns": [],
+                 "ok_1h": 0, "fail_1h": 0, "ok_3h": 0, "fail_3h": 0, "ok_total": 0, "fail_total": 0} for a in accounts()]
+
+
+def set_account_disabled(name, disabled):
+    name = os.path.basename(name)
+    try:
+        mgmt("PATCH", "/credentials/status", {"name": name, "disabled": bool(disabled)})
+        return
+    except Exception:
+        pass
+    f = AUTH_DIR / name  # sin proxy: se edita el archivo y el proxy lo lee al arrancar
+    d = json.loads(f.read_text())
+    d["disabled"] = bool(disabled)
+    f.write_text(json.dumps(d))
 
 
 def accounts():
@@ -399,6 +533,7 @@ def restart_clone():
 # falla ANTES de empezar a responder (sin cuota, límite, error del servidor, modelo no encontrado, sin conexión).
 FAILOVER_STATUS = {401, 402, 403, 404, 408, 429}  # 401: sesión caducada o proveedor sin acceso para ese modelo
 HOP = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailers", "transfer-encoding", "upgrade"}
+PROC_SESSION = "chatgpt2-" + secrets.token_hex(8)  # último recurso si Codex no manda ninguna sesión
 cooldown = {}   # modelo -> instante hasta el que se salta
 auto_last = {"model": "", "at": 0, "skipped": []}
 
@@ -504,6 +639,10 @@ class Router(BaseHTTPRequestHandler):
                 chain = auto_chain()
                 if not chain:
                     return self._fail(503, "AUTO no tiene modelos disponibles: elige modelos en Ajustes → Modelos personalizados.")
+        if not any(k.lower() == "x-opencode-session" for k in base):
+            sid = next((v for k, v in base.items() if k.lower() in ("session_id", "session-id", "conversation_id", "x-session-id")), "") \
+                or ((data or {}).get("prompt_cache_key") if data else "") or PROC_SESSION
+            base["x-opencode-session"] = str(sid)[:128]  # lo exige OpenCode Go (y es inocuo para los demás proveedores)
         skipped = []
         for i, model in enumerate(chain):
             payload = body
@@ -572,10 +711,18 @@ def start_router():
         print("enrutador AUTO no iniciado:", e, file=sys.stderr)
 
 
+def catalog_names():
+    try:
+        return [{"slug": m["slug"], "name": m["display_name"]} for m in json.loads(CATALOG.read_text())["models"]]
+    except Exception:
+        return []
+
+
 def go_status(st):
     k = go_key(st)
     ents = go_entries(st) if k else []
-    return {"configured": bool(k), "key_hint": ("…" + k[-4:]) if len(k) > 8 else "",
+    g = st.get("opencode_go") or {}
+    return {"configured": bool(k), "key_hint": ("…" + k[-4:]) if len(k) > 8 else "", "updated": g.get("updated", 0), "last_diff": g.get("last_diff") or {},
             "models": [{"name": e["name"], "alias": e["alias"], "display": e["display"], "proto": e["proto"]} for e in ents]}
 
 
@@ -640,7 +787,8 @@ class H(BaseHTTPRequestHandler):
                     models = []
                 self._send(200, {"providers": [mask(p) for p in st["providers"]], "accounts": accounts(), "models": models,
                                  "auto": (st.get("auto") or {}).get("models", []), "auto_last": auto_last,
-                                 "opencode_go": go_status(st)})
+                                 "opencode_go": go_status(st), "credentials": credentials(), "routing": strategy(st),
+                                 "catalog": catalog_names(), "default_model": (st.get("default_model") or {}).get("slug", "")})
             elif self.path.startswith("/login/"):
                 self._send(200, login_status(self.path.split("/")[2]))
             else:
@@ -672,6 +820,18 @@ class H(BaseHTTPRequestHandler):
                     clean.append({"name": name, "base_url": base, "api_key": key, "models": models, "disabled": bool(p.get("disabled"))})
                 save_state({**load_state(), "providers": clean})
                 self._send(200, {"ok": True})
+            elif self.path == "/default-model":
+                slug = str(self._body().get("slug", "")).strip()
+                if slug not in {m["slug"] for m in catalog_names()}:
+                    raise ValueError("ese modelo no está en el catálogo (aplica los cambios primero)")
+                save_state({**load_state(), "default_model": {"slug": slug, "pending": True}})
+                self._send(200, {"ok": True})
+            elif self.path == "/routing":
+                s_ = str(self._body().get("strategy", ""))
+                if s_ not in STRATEGIES:
+                    raise ValueError("estrategia desconocida")
+                save_state({**load_state(), "routing": {"strategy": s_}})
+                self._send(200, {"ok": True})
             elif self.path == "/opencode-go":
                 key = str(self._body().get("api_key", "")).strip()
                 if not key:
@@ -701,6 +861,15 @@ class H(BaseHTTPRequestHandler):
             if self.path == "/apply":
                 n = apply_all()
                 self._send(200, {"ok": True, "models": n})
+            elif self.path == "/opencode-go/refresh":
+                r = go_refresh()
+                if r is None:
+                    raise ValueError("OpenCode Go no está conectado")
+                self._send(200, r)
+            elif self.path == "/account-status":
+                b = self._body()
+                set_account_disabled(str(b.get("name", "")), bool(b.get("disabled")))
+                self._send(200, {"ok": True})
             elif self.path == "/restart":
                 restart_clone()
                 self._send(200, {"ok": True})
@@ -746,4 +915,5 @@ if __name__ == "__main__":
         print("hub inicializado")
         sys.exit(0)
     start_router()
+    threading.Thread(target=go_daily, daemon=True).start()
     ThreadingHTTPServer(("127.0.0.1", PORT), H).serve_forever()
