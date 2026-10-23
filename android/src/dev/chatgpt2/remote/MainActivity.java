@@ -155,7 +155,7 @@ public final class MainActivity extends Activity {
 	}
 	@Override protected void onResume() { super.onResume(); activityResumed = true; unlockWaitAttempts = 0; requestDeviceUnlock(); }
 	@Override protected void onPause() { activityResumed = false; main.removeCallbacks(unlockWhenReady); super.onPause(); }
-	@Override protected void onStop() { lastLeftAt = SystemClock.elapsedRealtime(); super.onStop(); }
+	@Override protected void onStop() { lastLeftAt = SystemClock.elapsedRealtime(); unlockRetrySuppressed = false; super.onStop(); }
 	@Override public void onWindowFocusChanged(boolean hasFocus) {
 		super.onWindowFocusChanged(hasFocus);
 		if (hasFocus) { unlockWaitAttempts = 0; requestDeviceUnlock(); }
