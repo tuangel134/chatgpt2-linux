@@ -54,6 +54,17 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+# --- «curl | bash»: el script llega por la entrada estándar y no hay carpetas hermanas. En ese caso solo se baja el
+# repositorio y se ejecuta el instalador real desde un archivo (así ningún comando puede tragarse el script).
+_self="${BASH_SOURCE[0]:-}"
+if [ -z "$_self" ] || [ ! -f "$_self" ] || [ ! -f "$(dirname "$_self")/modelhub/patch_ui.py" ]; then
+  command -v curl >/dev/null 2>&1 || { echo "[error] Hace falta curl para el instalador de una línea (o usa: git clone https://github.com/$REPO.git)." >&2; exit 1; }
+  _boot="$(mktemp -d "${TMPDIR:-/tmp}/chatgpt2-boot.XXXXXX")"
+  echo "Descargando el instalador de https://github.com/$REPO ..."
+  curl -fsSL "https://github.com/$REPO/archive/refs/heads/main.tar.gz" | tar -xz -C "$_boot" || { echo "[error] No se pudo bajar el repositorio." >&2; exit 1; }
+  CHATGPT2_BOOT_DIR="$_boot" exec bash "$_boot/$(basename "$REPO")-main/install.sh" "$@" </dev/null
+fi
+
 # Todo el cuerpo va dentro de main(): así, con «curl | bash», bash lee el script completo antes de ejecutarlo
 # y ningún comando (apt, sudo...) puede tragarse el resto del script desde la entrada estándar.
 main() {
@@ -166,7 +177,7 @@ else
 fi
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/chatgpt2-install.XXXXXX")"
-trap 'rm -rf "$WORK"' EXIT
+trap 'rm -rf "$WORK" ${CHATGPT2_BOOT_DIR:+"$CHATGPT2_BOOT_DIR"}' EXIT
 step "Extrayendo (sin instalar nada en el sistema)"
 ( cd "$WORK" && ar x "$DEB_FILE" ) || die "El .deb no se pudo abrir."
 DATA_TAR="$(ls "$WORK"/data.tar.* 2>/dev/null | head -1)"; CTRL_TAR="$(ls "$WORK"/control.tar.* 2>/dev/null | head -1)"
