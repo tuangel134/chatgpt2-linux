@@ -11,6 +11,10 @@ APK="${CHATGPT2_REMOTE_APK:-$ROOT/dist/chatgpt2-remote.apk}"
 ZXING="$ROOT/.tools/zxing-core-3.5.3.jar"
 ZXING_SHA256="8d8064c1636fdaef7189dd9055c7d59950a8940a12f2293956446ec3c109fd82"
 for t in "$BUILD_TOOLS/aapt2" "$BUILD_TOOLS/d8" "$BUILD_TOOLS/apksigner" "$PLATFORM"; do [ -e "$t" ] || { echo "Falta $t (instala build-tools;35.0.0 y platforms;android-35 con sdkmanager)." >&2; exit 1; }; done
+# Cada compilación lleva un versionCode mayor (minutos desde 2026-09-20): con el mismo número Android trata la instalación como
+# «reinstalar» y el instalador del teléfono puede borrar los datos (el emparejamiento). Con uno mayor es una actualización normal.
+VERSION_CODE="${VERSION_CODE:-$(( ($(date +%s) - 1789948800) / 60 ))}"
+VERSION_NAME="${VERSION_NAME:-1.1.$VERSION_CODE}"
 mkdir -p "$OUT/classes" "$OUT/res" "$OUT/dex" "$ROOT/dist"
 if [ ! -f "$ZXING" ]; then
   mkdir -p "$(dirname "$ZXING")"
@@ -22,7 +26,7 @@ mapfile -d '' sources < <(find "$ROOT/src" -name '*.java' -print0)
 javac --release 8 -classpath "$PLATFORM:$ZXING" -d "$OUT/classes" "${sources[@]}"
 mapfile -d '' classes < <(find "$OUT/classes" -name '*.class' -print0)
 "$BUILD_TOOLS/d8" --lib "$PLATFORM" --min-api 26 --output "$OUT/dex" "$ZXING" "${classes[@]}"
-"$BUILD_TOOLS/aapt2" link -I "$PLATFORM" --manifest "$ROOT/AndroidManifest.xml" --min-sdk-version 26 --target-sdk-version 35 -A "$ROOT/assets" -o "$OUT/unsigned.apk" "$OUT/res/resources.zip"
+"$BUILD_TOOLS/aapt2" link -I "$PLATFORM" --manifest "$ROOT/AndroidManifest.xml" --min-sdk-version 26 --target-sdk-version 35 --version-code "$VERSION_CODE" --version-name "$VERSION_NAME" -A "$ROOT/assets" -o "$OUT/unsigned.apk" "$OUT/res/resources.zip"
 "$BUILD_TOOLS/aapt" add -k "$OUT/unsigned.apk" "$OUT/dex/classes.dex" >/dev/null
 # Clave de firma propia: se genera una vez con contraseña aleatoria y se guarda con permisos 0600.
 KEY="${CHATGPT2_REMOTE_KEYSTORE:-${XDG_CACHE_HOME:-$HOME/.cache}/chatgpt2/android-remote.keystore}"
