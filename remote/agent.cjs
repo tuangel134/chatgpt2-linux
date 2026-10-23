@@ -190,10 +190,28 @@ codex.onNotify = (m) => {
     }
   } else if (m.method === "error" && p.willRetry === false) {
     for (const j of jobs.values()) if (j.threadId === p.threadId && j.status === "running") { j.status = "error"; j.error = (p.error && p.error.message) || "Error del modelo."; }
-  } else if (m.method === "item/completed" && p.item && p.item.type === "agentMessage") {
-    for (const j of jobs.values()) if (j.threadId === p.threadId && j.turnId === p.turnId) j.text = p.item.text;
+  } else if (m.method === "item/agentMessage/delta") {
+    for (const j of jobs.values()) if (j.threadId === p.threadId && j.turnId === p.turnId && j.status === "running") {
+      if (j.itemId !== p.itemId) { j.itemId = p.itemId; j.partial = ""; }
+      j.partial += p.delta || "";
+    }
+  } else if ((m.method === "item/started" || m.method === "item/completed") && p.item) {
+    for (const j of jobs.values()) if (j.threadId === p.threadId && j.turnId === p.turnId) {
+      if (m.method === "item/completed" && p.item.type === "agentMessage") { j.text = p.item.text; j.partial = ""; }
+      const a = activityOf(p.item);
+      if (a) { const i = j.activity.findIndex((x) => x.id === p.item.id); if (i >= 0) j.activity[i] = { ...a, id: p.item.id }; else { j.activity.push({ ...a, id: p.item.id }); if (j.activity.length > 8) j.activity.shift(); } }
+    }
   }
 };
+
+function activityOf(item) {
+  const cmd = (c) => (Array.isArray(c) ? c.join(" ") : String(c || ""));
+  if (item.type === "commandExecution") return { kind: "command", text: cmd(item.command).slice(0, 200), status: item.status || "" };
+  if (item.type === "fileChange") return { kind: "file", text: (item.changes || []).map((c) => c.path).filter(Boolean).slice(0, 4).join(", ") || "Cambios en archivos", status: item.status || "" };
+  if (item.type === "webSearch") return { kind: "web", text: String(item.query || "Búsqueda web").slice(0, 120), status: item.status || "" };
+  if (item.type === "mcpToolCall") return { kind: "tool", text: `${item.server || ""}.${item.tool || ""}`.slice(0, 120), status: item.status || "" };
+  return null;
+}
 
 const wsId = (cwd) => crypto.createHash("sha1").update(cwd).digest("hex").slice(0, 12);
 const AMBIENT = /<in-app-browser-context[\s\S]*?<\/in-app-browser-context>\s*/g;
@@ -233,14 +251,24 @@ async function rootOf(workspaceId) {
 }
 
 async function messages(workspaceId, sessionId, limit) {
-  const r = await codex.call("thread/turns/list", { threadId: sessionId, limit: Math.min(40, Math.max(1, limit || 30)), sortDirection: "desc" });
+  const r = await codex.call("thread/turns/list", { threadId: sessionId, limit: Math.min(40, Math.max(1, limit || 30)), sortDirection: "desc", itemsView: "full" });
   const turns = (r.data || []).slice().reverse();
   const out = [];
+  const part = (t) => ({ message: { parts: [{ type: "text", text: t }] } });
   for (const turn of turns) for (const item of turn.items || []) {
-    if (item.type === "userMessage") { const t = userText(item.content); if (t) out.push({ role: "user", message: { parts: [{ type: "text", text: t }] } }); }
-    else if (item.type === "agentMessage" && item.text) out.push({ role: "assistant", message: { parts: [{ type: "text", text: item.text }] } });
+    if (item.type === "userMessage") { const t = userText(item.content); if (t) out.push({ role: "user", ...part(t) }); }
+    else if (item.type === "agentMessage" && item.text) out.push({ role: "assistant", ...part(item.text) });
+    else { const a = activityOf(item); if (a) out.push({ role: "tool", kind: a.kind, status: a.status, exitCode: item.exitCode, ...part(a.text) }); }
   }
   return out;
+}
+
+async function models() {
+  const r = await codex.call("model/list", { limit: 200 });
+  let def = settings.model || "";
+  if (!def) { try { const m = /^model\s*=\s*"([^"]+)"/m.exec(fs.readFileSync(path.join(CODEX_HOME, "config.toml"), "utf8")); if (m) def = m[1]; } catch {} }
+  const list = (r.data || []).filter((m) => !m.hidden).map((m) => ({ id: m.id, name: m.displayName || m.id, efforts: (m.supportedReasoningEfforts || []).map((e) => (typeof e === "string" ? e : e.reasoningEffort || e.effort)).filter(Boolean), effort: m.defaultReasoningEffort || "" }));
+  return { models: list, default: def };
 }
 
 async function ensureLoaded(threadId) {
@@ -249,19 +277,20 @@ async function ensureLoaded(threadId) {
   loaded.add(threadId);
 }
 
-async function start(workspaceId, sessionId, text) {
+async function start(workspaceId, sessionId, text, model, effort) {
+  model = (typeof model === "string" && model.trim()) || settings.model || "";
   const root = await rootOf(workspaceId);
   let threadId = sessionId;
   if (threadId) {
     if ([...jobs.values()].some((j) => j.threadId === threadId && j.status === "running")) throw new Error("Ya hay una tarea en curso en esta conversación. Espera o cancélala.");
     await ensureLoaded(threadId);
   } else {
-    const t = await codex.call("thread/start", { cwd: root, approvalPolicy: "never", sandbox: settings.permission, ...(settings.model ? { model: settings.model } : {}) });
+    const t = await codex.call("thread/start", { cwd: root, approvalPolicy: "never", sandbox: settings.permission, ...(model ? { model } : {}) });
     threadId = t.thread.id; loaded.add(threadId);
   }
-  const r = await codex.call("turn/start", { threadId, input: [{ type: "text", text, text_elements: [] }], approvalPolicy: "never", ...(settings.model ? { model: settings.model } : {}) });
+  const r = await codex.call("turn/start", { threadId, input: [{ type: "text", text, text_elements: [] }], approvalPolicy: "never", ...(model ? { model } : {}), ...(typeof effort === "string" && /^[a-z]{3,10}$/.test(effort) ? { effort } : {}) });
   const jobId = crypto.randomUUID();
-  jobs.set(jobId, { threadId, turnId: r.turn.id, status: "running", error: "", sessionId: threadId, text: "", at: Date.now() });
+  jobs.set(jobId, { threadId, turnId: r.turn.id, status: "running", error: "", sessionId: threadId, text: "", partial: "", itemId: "", activity: [], at: Date.now() });
   for (const [k, j] of jobs) if (j.status !== "running" && Date.now() - j.at > 3600_000) jobs.delete(k);
   return { jobId, sessionId: threadId };
 }
@@ -274,7 +303,7 @@ async function cancel(workspaceId, sessionId) {
 function job(jobId) {
   const j = jobs.get(jobId);
   if (!j) return { status: "error", error: "No encuentro esa tarea (¿se reinició el agente?)." };
-  return { status: j.status, sessionId: j.sessionId, error: j.error || undefined, result: j.text || undefined };
+  return { status: j.status, sessionId: j.sessionId, error: j.error || undefined, result: j.text || undefined, partial: j.partial || undefined, activity: j.activity.length ? j.activity : undefined };
 }
 
 function capture() {
@@ -297,8 +326,9 @@ async function handleCommand(c) {
     case "send": {
       const text = str("text").trim();
       if (!str("workspaceId") || !text) throw new Error("Faltan workspaceId y texto.");
-      return { ok: true, ...(await start(str("workspaceId"), str("sessionId") || undefined, text)) };
+      return { ok: true, ...(await start(str("workspaceId"), str("sessionId") || undefined, text, c.model, c.effort)) };
     }
+    case "models": return { ok: true, ...(await models()) };
     case "cancel": if (!str("sessionId")) throw new Error("Falta sessionId."); return { ok: true, ...(await cancel(str("workspaceId"), str("sessionId"))) };
     case "job": if (!str("jobId")) throw new Error("Falta jobId."); return { ok: true, status: job(str("jobId")) };
     case "screenshot": {

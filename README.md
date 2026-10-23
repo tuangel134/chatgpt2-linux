@@ -298,7 +298,7 @@ Para usar ChatGPT 2 desde el móvil (como el *remote control* de Codex), con **t
  teléfono (ChatGPT 2 Remote) ──cifrado AES-GCM──▶ relay (tu Worker) ◀──la PC sale a buscarlo── agente ──▶ codex app-server ──▶ tus modelos
 ```
 
-**Qué puedes hacer desde el teléfono:** ver tus carpetas de trabajo y las conversaciones de Codex (las mismas de la app de escritorio), abrir una, empezar una nueva, escribir (la tarea corre en la PC y el teléfono sigue su estado), cancelar una tarea en curso y pedir una captura del escritorio. Lo que hagas allí aparece en la app de escritorio y al revés.
+**Qué puedes hacer desde el teléfono:** una pantalla como la de ChatGPT. Menú lateral con tus **proyectos** y todas tus **conversaciones** de Codex (las mismas de la app de escritorio, con buscador y «Nuevo chat»), **selector de modelo** (los de tu hub, con nivel de razonamiento), chat con historial y formato (listas, código con botón de copiar), la respuesta **en vivo** mientras se escribe, las acciones que hace la PC (comandos, cambios de archivos) agrupadas, botón de **detener** y **captura del escritorio**. Lo que hagas allí aparece en la app de escritorio y al revés.
 
 **Puesta en marcha (una vez):**
 

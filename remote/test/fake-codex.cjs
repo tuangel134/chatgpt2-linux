@@ -11,7 +11,7 @@ const threads = [
 ];
 const turns = { "t-alpha": [{ id: "u1", status: "completed", items: [
   { type: "userMessage", content: [{ type: "text", text: "<in-app-browser-context source=\"x\">\nruido\n</in-app-browser-context>\n\n## My request:\nhola, arregla el título" }] },
-  { type: "commandExecution", command: "ls" },
+  { type: "commandExecution", id: "x", command: "ls", status: "completed", exitCode: 0 },
   { type: "agentMessage", text: "Listo, cambié el título." }] }] };
 let n = 0;
 const active = {};
@@ -22,6 +22,10 @@ readline.createInterface({ input: process.stdin }).on("line", (l) => {
   const p = m.params || {};
   switch (m.method) {
     case "initialize": return ok({ userAgent: "fake", codexHome: "/tmp" });
+    case "model/list": return ok({ data: [
+      { id: "m-a", model: "m-a", displayName: "Modelo A", hidden: false, supportedReasoningEfforts: ["low", "high"], defaultReasoningEffort: "low" },
+      { id: "m-b", model: "m-b", displayName: "Modelo B", hidden: false, supportedReasoningEfforts: [{ reasoningEffort: "medium" }], defaultReasoningEffort: "medium" },
+      { id: "m-hidden", model: "m-hidden", displayName: "Oculto", hidden: true, supportedReasoningEfforts: [] }] });
     case "thread/list": return ok({ data: threads, nextCursor: null });
     case "thread/turns/list": return ok({ data: (turns[p.threadId] || []).slice().reverse(), nextCursor: null });
     case "thread/resume": return ok({ thread: threads.find((t) => t.id === p.threadId) });
@@ -30,8 +34,13 @@ readline.createInterface({ input: process.stdin }).on("line", (l) => {
       const id = "turn-" + ++n; ok({ turn: { id, status: "inProgress", items: [] } });
       const slow = JSON.stringify(p.input).includes("lento");
       active[p.threadId] = id;
+      setTimeout(() => {
+        out({ jsonrpc: "2.0", method: "item/started", params: { threadId: p.threadId, turnId: id, item: { type: "commandExecution", id: "c1", command: "ls -la", status: "inProgress" } } });
+        out({ jsonrpc: "2.0", method: "item/agentMessage/delta", params: { threadId: p.threadId, turnId: id, itemId: "a", delta: "Hola " } });
+        out({ jsonrpc: "2.0", method: "item/agentMessage/delta", params: { threadId: p.threadId, turnId: id, itemId: "a", delta: "mundo" } });
+      }, 30);
       const t = setTimeout(() => {
-        const text = "Respuesta a: " + p.input[0].text + (p.model ? " [" + p.model + "]" : "");
+        const text = "Respuesta a: " + p.input[0].text + (p.model ? " [" + p.model + "]" : "") + (p.effort ? " {" + p.effort + "}" : "");
         out({ jsonrpc: "2.0", method: "item/completed", params: { threadId: p.threadId, turnId: id, completedAtMs: 1, item: { type: "agentMessage", id: "a", text } } });
         if (JSON.stringify(p.input).includes("falla")) out({ jsonrpc: "2.0", method: "turn/completed", params: { threadId: p.threadId, turn: { id, status: "failed", error: { message: "boom" }, items: [] } } });
         else out({ jsonrpc: "2.0", method: "turn/completed", params: { threadId: p.threadId, turn: { id, status: "completed", items: [] } } });

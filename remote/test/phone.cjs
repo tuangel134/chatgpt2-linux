@@ -13,14 +13,18 @@ class Phone {
   enc(v) { const iv = crypto.randomBytes(12); const c = crypto.createCipheriv("aes-256-gcm", Buffer.from(this.encKey, "base64url"), iv); c.setAAD(Buffer.from(this.inst)); const ct = Buffer.concat([c.update(JSON.stringify(v)), c.final(), c.getAuthTag()]); return { iv: iv.toString("base64url"), ciphertext: ct.toString("base64url") }; }
   dec(p) { const b = Buffer.from(p.ciphertext, "base64url"); const d = crypto.createDecipheriv("aes-256-gcm", Buffer.from(this.encKey, "base64url"), Buffer.from(p.iv, "base64url")); d.setAAD(Buffer.from(this.inst)); d.setAuthTag(b.subarray(-16)); return JSON.parse(Buffer.concat([d.update(b.subarray(0, -16)), d.final()]).toString()); }
   async ask(command, timeout = 8000) {
+    // Varias órdenes a la vez comparten el buzón de respuestas: lo que llega para otra orden se guarda (igual que hace la app).
+    this.cache = this.cache || new Map();
     const id = crypto.randomUUID();
     const q = await this.raw("command", { "X-Forja-Device-Token": this.token }, { id, body: this.enc(command) });
     assert.equal(q.status, 200, JSON.stringify(q.body));
     const end = Date.now() + timeout;
     while (Date.now() < end) {
+      if (this.cache.has(id)) { const v = this.cache.get(id); this.cache.delete(id); return v; }
       const r = await this.raw("responses", { "X-Forja-Device-Token": this.token });
-      for (const m of r.body.messages || []) if (m.id === id) return this.dec(m.body);
-      await new Promise((x) => setTimeout(x, 60));
+      for (const m of r.body.messages || []) this.cache.set(m.id, this.dec(m.body));
+      if (this.cache.has(id)) { const v = this.cache.get(id); this.cache.delete(id); return v; }
+      await new Promise((x) => setTimeout(x, 80));
     }
     throw new Error("sin respuesta a " + command.type);
   }

@@ -69,10 +69,11 @@ test("estado: carpetas y conversaciones de Codex (sin subagentes)", async () => 
   assert.ok(bot.sessions[0].title.length <= 70);
 });
 
-test("mensajes: texto de usuario y de asistente, sin ruido del navegador ni herramientas", async () => {
+test("mensajes: usuario, asistente y comandos, sin el ruido del navegador", async () => {
   const ws = (await phone.ask({ type: "status" })).workspaces.find((w) => w.name === "web");
   const r = await phone.ask({ type: "messages", workspaceId: ws.id, sessionId: "t-alpha" });
-  assert.deepEqual(r.messages.map((m) => [m.role, m.message.parts[0].text]), [["user", "hola, arregla el título"], ["assistant", "Listo, cambié el título."]]);
+  assert.deepEqual(r.messages.map((m) => [m.role, m.message.parts[0].text]), [["user", "hola, arregla el título"], ["tool", "ls"], ["assistant", "Listo, cambié el título."]]);
+  assert.equal(r.messages[1].kind, "command"); assert.equal(r.messages[1].exitCode, 0);
 });
 
 test("enviar a una conversación existente: tarea, estado y resultado", async () => {
@@ -125,6 +126,28 @@ test("órdenes desconocidas o de funciones que no existen dan error claro", asyn
   assert.match((await phone.ask({ type: "rm-rf" })).error, /desconocida/);
 });
 
+test("modelos: lista visible, esfuerzos y modelo por defecto", async () => {
+  const r = await phone.ask({ type: "models" });
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.models.map((m) => m.id), ["m-a", "m-b"]);                // el oculto no sale
+  assert.deepEqual(r.models[0].efforts, ["low", "high"]); assert.deepEqual(r.models[1].efforts, ["medium"]);
+  assert.equal(typeof r.default, "string");
+});
+
+test("enviar con modelo y esfuerzo elegidos desde el teléfono, texto parcial y actividad en vivo", async () => {
+  await control("POST", "/settings", { model: "" });
+  const ws = (await phone.ask({ type: "status" })).workspaces.find((w) => w.name === "web");
+  const s = await phone.ask({ type: "send", workspaceId: ws.id, sessionId: "t-alpha", text: "algo lento", model: "m-b", effort: "high" });
+  let st, saw = false;
+  for (let i = 0; i < 60; i++) { st = (await phone.ask({ type: "job", jobId: s.jobId })).status; if (st.partial === "Hola mundo" && st.activity) saw = true; if (saw) break; await new Promise((r) => setTimeout(r, 50)); }
+  assert.ok(saw, "debió verse el texto parcial");
+  assert.deepEqual(st.activity.map((a) => [a.kind, a.text]), [["command", "ls -la"]]);
+  await phone.ask({ type: "cancel", workspaceId: ws.id, sessionId: "t-alpha" });
+  const s2 = await phone.ask({ type: "send", workspaceId: ws.id, sessionId: "t-alpha", text: "fin", model: "m-b", effort: "high" });
+  for (let i = 0; i < 40; i++) { st = (await phone.ask({ type: "job", jobId: s2.jobId })).status; if (st.status !== "running") break; await new Promise((r) => setTimeout(r, 50)); }
+  assert.equal(st.result, "Respuesta a: fin [m-b] {high}");
+});
+
 test("dispositivos: se listan y se pueden revocar", async () => {
   const d = (await control("GET", "/devices")).body.devices;
   assert.equal(d.length, 1); assert.equal(d[0].label, "Honor de prueba");
@@ -140,3 +163,4 @@ test("nuevo QR conserva la instalación y el cifrado; detener con revocación bo
   const s = (await control("GET", "/status")).body;
   assert.equal(s.configured, false); assert.equal(s.running, false);
 });
+

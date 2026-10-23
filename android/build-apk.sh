@@ -22,7 +22,7 @@ mapfile -d '' sources < <(find "$ROOT/src" -name '*.java' -print0)
 javac --release 8 -classpath "$PLATFORM:$ZXING" -d "$OUT/classes" "${sources[@]}"
 mapfile -d '' classes < <(find "$OUT/classes" -name '*.class' -print0)
 "$BUILD_TOOLS/d8" --lib "$PLATFORM" --min-api 26 --output "$OUT/dex" "$ZXING" "${classes[@]}"
-"$BUILD_TOOLS/aapt2" link -I "$PLATFORM" --manifest "$ROOT/AndroidManifest.xml" --min-sdk-version 26 --target-sdk-version 35 -o "$OUT/unsigned.apk" "$OUT/res/resources.zip"
+"$BUILD_TOOLS/aapt2" link -I "$PLATFORM" --manifest "$ROOT/AndroidManifest.xml" --min-sdk-version 26 --target-sdk-version 35 -A "$ROOT/assets" -o "$OUT/unsigned.apk" "$OUT/res/resources.zip"
 "$BUILD_TOOLS/aapt" add -k "$OUT/unsigned.apk" "$OUT/dex/classes.dex" >/dev/null
 # Clave de firma propia: se genera una vez con contraseña aleatoria y se guarda con permisos 0600.
 KEY="${CHATGPT2_REMOTE_KEYSTORE:-${XDG_CACHE_HOME:-$HOME/.cache}/chatgpt2/android-remote.keystore}"

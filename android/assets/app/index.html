@@ -1,0 +1,353 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src http://127.0.0.1:8899">
+<title>ChatGPT 2</title>
+<style>
+:root{--bg:#171717;--side:#0f0f0f;--surface:#212121;--surface2:#2f2f2f;--line:#303030;--text:#ececec;--muted:#9b9b9b;--accent:#10a37f;--red:#ef4444;--amber:#f59e0b}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--text);font:16px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;overscroll-behavior:none}
+button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:pointer}
+#app{position:fixed;inset:0;display:flex;flex-direction:column;padding-top:env(safe-area-inset-top)}
+/* barra superior */
+#top{display:flex;align-items:center;gap:8px;padding:8px 10px;flex:0 0 auto}
+.icon{width:42px;height:42px;border-radius:50%;background:var(--surface);display:grid;place-items:center;flex:0 0 auto}
+.icon svg{width:22px;height:22px;stroke:var(--text);fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+#modelPill{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;align-items:flex-start;padding:2px 8px}
+#modelPill b{font-weight:600;font-size:17px;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#modelPill b::after{content:" ▾";color:var(--muted);font-size:13px}
+#modelPill small{color:var(--muted);font-size:12px;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#conn{width:9px;height:9px;border-radius:50%;background:var(--muted);flex:0 0 auto}
+#conn.ok{background:var(--accent)}#conn.bad{background:var(--amber)}
+/* mensajes */
+#msgs{flex:1 1 auto;overflow-y:auto;padding:6px 14px 14px;scroll-behavior:smooth}
+.empty{height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;text-align:center;color:var(--muted);padding:0 24px}
+.empty h2{margin:0;color:var(--text);font-size:26px;font-weight:600}
+.empty .logo{width:54px;height:54px;border-radius:50%;background:var(--accent);display:grid;place-items:center;font-weight:800;font-size:26px;color:#fff;margin-bottom:10px}
+.u{display:flex;justify-content:flex-end;margin:14px 0 6px}
+.u div{max-width:84%;background:var(--surface2);padding:9px 14px;border-radius:20px;white-space:pre-wrap;word-break:break-word}
+.u div.clip{opacity:.85}
+.a{margin:10px 0 6px;word-break:break-word}
+.a p,.u p{margin:0 0 10px}.a p:last-child{margin-bottom:0}
+.a h1,.a h2,.a h3{font-size:1.05em;margin:14px 0 6px}
+.a ul,.a ol{margin:4px 0 10px;padding-left:22px}.a li{margin:2px 0}
+.a blockquote{margin:6px 0;padding:2px 12px;border-left:3px solid var(--line);color:var(--muted)}
+.a a{color:#7cc4ff}
+.a code{background:#2b2b2b;border-radius:6px;padding:1px 5px;font:13.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
+.a pre{background:#0d0d0d;border:1px solid var(--line);border-radius:12px;margin:8px 0 12px;overflow:hidden}
+.a pre .bar{display:flex;justify-content:space-between;align-items:center;padding:6px 12px;background:#1d1d1d;color:var(--muted);font-size:12px}
+.a pre code{display:block;background:none;padding:10px 12px;overflow-x:auto;white-space:pre;font-size:13px}
+.tools{margin:6px 0;border:1px solid var(--line);border-radius:12px;overflow:hidden;font-size:13.5px}
+.tools summary{list-style:none;padding:8px 12px;color:var(--muted);cursor:pointer;display:flex;align-items:center;gap:8px}
+.tools summary::-webkit-details-marker{display:none}
+.tools summary::after{content:"▾";margin-left:auto}
+.tools[open] summary::after{content:"▴"}
+.tools .t{padding:6px 12px;border-top:1px solid var(--line);font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace;word-break:break-all;display:flex;gap:8px}
+.tools .t i{font-style:normal;flex:0 0 auto}
+.tools .t.err{color:#fca5a5}
+.live{margin:6px 0}.live .t{color:var(--muted);font:12.5px/1.4 ui-monospace,monospace;margin:3px 0;word-break:break-all}
+.dots{display:inline-flex;gap:4px;padding:6px 0}.dots i{width:7px;height:7px;border-radius:50%;background:var(--muted);animation:b 1.1s infinite ease-in-out}.dots i:nth-child(2){animation-delay:.15s}.dots i:nth-child(3){animation-delay:.3s}
+@keyframes b{0%,80%,100%{opacity:.25}40%{opacity:1}}
+.err-line{color:#fca5a5;margin:8px 0}
+/* compositor */
+#comp{flex:0 0 auto;padding:6px 10px calc(8px + env(safe-area-inset-bottom))}
+#box{background:var(--surface);border-radius:26px;padding:8px 8px 8px 16px;display:flex;align-items:flex-end;gap:8px}
+#txt{flex:1 1 auto;background:none;border:0;outline:0;color:var(--text);font:inherit;resize:none;max-height:140px;padding:8px 0;min-height:24px}
+#txt::placeholder{color:var(--muted)}
+#send{width:40px;height:40px;border-radius:50%;background:var(--accent);display:grid;place-items:center;flex:0 0 auto}
+#send:disabled{background:var(--surface2);opacity:.6}
+#send svg{width:20px;height:20px;stroke:#fff;fill:none;stroke-width:2.4;stroke-linecap:round;stroke-linejoin:round}
+#send.stop{background:#fff}#send.stop svg{stroke:#000;fill:#000}
+/* menú lateral */
+#scrim{position:fixed;inset:0;background:rgba(0,0,0,.55);opacity:0;pointer-events:none;transition:opacity .2s;z-index:20}
+#scrim.on{opacity:1;pointer-events:auto}
+#drawer{position:fixed;top:0;bottom:0;left:0;width:84%;max-width:360px;background:var(--side);transform:translateX(-102%);transition:transform .22s;z-index:21;display:flex;flex-direction:column;padding-top:env(safe-area-inset-top)}
+#drawer.on{transform:none}
+#dh{display:flex;align-items:center;gap:8px;padding:14px 14px 8px}
+#dh b{font-size:20px;flex:1}
+#search{margin:4px 14px 8px;background:var(--surface);border:0;border-radius:14px;padding:10px 14px;color:var(--text);font:inherit;outline:0}
+#newchat{margin:2px 14px 10px;background:var(--text);color:#000;border-radius:24px;padding:12px;font-weight:600;display:flex;align-items:center;justify-content:center;gap:8px}
+#dscroll{flex:1;overflow-y:auto;padding:0 8px calc(14px + env(safe-area-inset-bottom))}
+.sec{padding:14px 10px 6px;color:var(--muted);font-size:13px;font-weight:600;letter-spacing:.2px}
+.proj{display:flex;align-items:center;gap:10px;padding:10px;border-radius:12px;width:100%;text-align:left}
+.proj:active,.chat:active{background:var(--surface)}
+.proj .n{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.proj .c{color:var(--muted);font-size:13px}
+.proj svg{width:20px;height:20px;stroke:var(--muted);fill:none;stroke-width:1.8}
+.chat{display:flex;align-items:center;gap:8px;padding:10px 10px 10px 14px;border-radius:12px;width:100%;text-align:left}
+.chat.sub{padding-left:40px}
+.chat .n{flex:1;min-width:0}
+.chat .n div{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.chat .n small{display:block;color:var(--muted);font-size:12px}
+.chat.on{background:var(--surface)}
+.run{width:8px;height:8px;border-radius:50%;background:var(--accent);animation:b 1.1s infinite}
+.dfoot{display:flex;gap:8px;padding:8px 14px calc(10px + env(safe-area-inset-bottom));border-top:1px solid var(--line)}
+.dfoot button{flex:1;background:var(--surface);border-radius:14px;padding:10px;font-size:14px}
+/* hojas */
+#sheet{position:fixed;left:0;right:0;bottom:0;background:var(--surface);border-radius:22px 22px 0 0;z-index:31;transform:translateY(105%);transition:transform .22s;max-height:78%;display:flex;flex-direction:column;padding-bottom:env(safe-area-inset-bottom)}
+#sheet.on{transform:none}
+#sheet h3{margin:0;padding:16px 18px 6px;font-size:17px}
+#sheetBody{overflow-y:auto;padding:4px 10px 12px}
+.opt{display:flex;align-items:center;gap:10px;padding:12px 10px;border-radius:12px;width:100%;text-align:left}
+.opt:active{background:var(--surface2)}
+.opt .n{flex:1;min-width:0}.opt .n small{display:block;color:var(--muted);font-size:12px}
+.opt .ck{color:var(--accent);font-weight:700}
+.chips{display:flex;gap:8px;flex-wrap:wrap;padding:6px 10px 10px}
+.chip{padding:7px 14px;border-radius:18px;background:var(--surface2);font-size:14px}.chip.on{background:var(--accent);color:#fff}
+#shot{position:fixed;inset:0;background:#000;z-index:40;display:none;flex-direction:column}
+#shot.on{display:flex}#shot img{flex:1;min-height:0;object-fit:contain;width:100%}
+#shot button{padding:16px;background:var(--surface);font-weight:600}
+#toast{position:fixed;left:50%;bottom:calc(86px + env(safe-area-inset-bottom));transform:translateX(-50%) translateY(20px);background:#3a1d1d;color:#fecaca;padding:10px 16px;border-radius:14px;max-width:88%;font-size:14px;opacity:0;pointer-events:none;transition:.2s;z-index:50}
+#toast.on{opacity:1;transform:translateX(-50%)}#toast.info{background:#173b30;color:#bbf7d0}
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="top">
+    <button class="icon" id="menuBtn" aria-label="Menú"><svg viewBox="0 0 24 24"><path d="M4 8h16M4 16h10"/></svg></button>
+    <button id="modelPill"><b id="modelName">Modelo</b><small id="modelSub"></small></button>
+    <span id="conn"></span>
+    <button class="icon" id="moreBtn" aria-label="Más"><svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="19" cy="12" r="1.2"/></svg></button>
+  </div>
+  <div id="msgs"></div>
+  <div id="comp"><div id="box">
+    <textarea id="txt" rows="1" placeholder="Pregunta lo que quieras"></textarea>
+    <button id="send" aria-label="Enviar"><svg viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"/></svg></button>
+  </div></div>
+</div>
+<div id="scrim"></div>
+<aside id="drawer">
+  <div id="dh"><b>ChatGPT 2</b><button class="icon" id="closeDrawer" aria-label="Cerrar"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+  <input id="search" placeholder="Buscar conversaciones" autocomplete="off">
+  <button id="newchat"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#000" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>Nuevo chat</button>
+  <div id="dscroll"></div>
+  <div class="dfoot"><button id="refreshBtn">Actualizar</button><button id="shotBtn">Captura del escritorio</button></div>
+</aside>
+<div id="sheet"><h3 id="sheetTitle"></h3><div id="sheetBody"></div></div>
+<div id="shot"><img id="shotImg" alt="Captura"><button id="shotClose">Cerrar</button></div>
+<div id="toast"></div>
+<script>
+"use strict";
+// ---------------------------------------------------------------- puente nativo (Android) o de desarrollo
+const DEV = new URLSearchParams(location.search).get("dev");
+const pending = new Map(); let rid = 0;
+window.__native = (id, ok, data) => { const p = pending.get(id); if (!p) return; pending.delete(id); clearTimeout(p.t); if (ok) { try { p.res(JSON.parse(data)); } catch (e) { p.rej(new Error("Respuesta ilegible")); } } else p.rej(new Error(data || "Error")); };
+function call(cmd, timeout = 70000) {
+  return new Promise((res, rej) => {
+    const id = String(++rid);
+    const t = setTimeout(() => { pending.delete(id); rej(new Error("Sin respuesta de la PC")); }, timeout);
+    pending.set(id, { res, rej, t });
+    if (window.Android) window.Android.call(id, JSON.stringify(cmd));
+    else if (DEV) fetch(DEV + "/call", { method: "POST", body: JSON.stringify(cmd) }).then((r) => r.json()).then((j) => window.__native(id, j.ok !== false, j.ok === false ? j.error : JSON.stringify(j))).catch((e) => window.__native(id, false, e.message));
+    else window.__native(id, false, "Sin puente");
+  });
+}
+const $ = (s) => document.querySelector(s);
+const store = { get: (k, d) => { try { const v = localStorage.getItem("c2." + k); return v === null ? d : JSON.parse(v); } catch { return d; } }, set: (k, v) => { try { localStorage.setItem("c2." + k, JSON.stringify(v)); } catch {} } };
+
+// ---------------------------------------------------------------- estado
+const S = { ws: [], wsId: store.get("wsId", ""), sid: store.get("sid", ""), msgs: [], models: [], defModel: "", model: store.get("model", ""), effort: store.get("effort", ""), job: null, loading: false, err: "", openProj: store.get("openProj", {}) };
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const curWs = () => S.ws.find((w) => w.id === S.wsId);
+const curSession = () => { const w = curWs(); return w && w.sessions.find((x) => x.id === S.sid); };
+function toast(t, info) { const e = $("#toast"); e.textContent = t; e.className = "on" + (info ? " info" : ""); clearTimeout(toast.t); toast.t = setTimeout(() => (e.className = ""), 3800); }
+function setConn(state) { $("#conn").className = state; }
+
+// ---------------------------------------------------------------- markdown seguro (todo se escapa antes de dar formato)
+function md(src) {
+  const blocks = []; let t = String(src).replace(/\r/g, "");
+  t = t.replace(/```([\w+#.-]*)\n([\s\S]*?)```/g, (_, lang, code) => { blocks.push({ lang, code: code.replace(/\n$/, "") }); return `\u0000${blocks.length - 1}\u0000`; });
+  const inline = (s) => esc(s)
+    .replace(/`([^`\n]+)`/g, "<code>$1</code>")
+    .replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/(^|[\s(])\*([^*\n]+)\*/g, "$1<em>$2</em>")
+    .replace(/!\[([^\]\n]*)\]\([^)\n]*\)/g, "<em>🖼 $1</em>")
+    .replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" rel="noopener">$1</a>')
+    .replace(/\[([^\]\n]+)\]\((?!https?:)[^)\n]*\)/g, "<code>$1</code>")
+    .replace(/(^|[\s(])(https?:\/\/[^\s<)]+)/g, '$1<a href="$2" rel="noopener">$2</a>');
+  const out = []; const lines = t.split("\n"); let list = null, para = [];
+  const flushP = () => { if (para.length) { out.push("<p>" + inline(para.join("\n")).replace(/\n/g, "<br>") + "</p>"); para = []; } };
+  const flushL = () => { if (list) { out.push(`<${list.t}>${list.items.map((i) => "<li>" + inline(i) + "</li>").join("")}</${list.t}>`); list = null; } };
+  for (const line of lines) {
+    let m;
+    if ((m = /^\u0000(\d+)\u0000$/.exec(line.trim()))) { flushP(); flushL(); const b = blocks[+m[1]]; out.push(`<pre><div class="bar"><span>${esc(b.lang || "código")}</span><button data-copy="${+m[1]}">Copiar</button></div><code>${esc(b.code)}</code></pre>`); }
+    else if ((m = /^(#{1,3})\s+(.*)$/.exec(line))) { flushP(); flushL(); out.push(`<h${m[1].length}>${inline(m[2])}</h${m[1].length}>`); }
+    else if ((m = /^\s*[-*•]\s+(.*)$/.exec(line))) { flushP(); if (!list || list.t !== "ul") { flushL(); list = { t: "ul", items: [] }; } list.items.push(m[1]); }
+    else if ((m = /^\s*\d+[.)]\s+(.*)$/.exec(line))) { flushP(); if (!list || list.t !== "ol") { flushL(); list = { t: "ol", items: [] }; } list.items.push(m[1]); }
+    else if ((m = /^>\s?(.*)$/.exec(line))) { flushP(); flushL(); out.push("<blockquote>" + inline(m[1]) + "</blockquote>"); }
+    else if (!line.trim()) { flushP(); flushL(); }
+    else { flushL(); para.push(line); }
+  }
+  flushP(); flushL();
+  md.blocks = blocks; return out.join("");
+}
+document.addEventListener("click", (e) => { const b = e.target.closest("[data-copy]"); if (!b) return; const code = b.closest("pre").querySelector("code").textContent; (navigator.clipboard ? navigator.clipboard.writeText(code) : Promise.reject()).then(() => (b.textContent = "Copiado"), () => { const r = document.createRange(); r.selectNodeContents(b.closest("pre").querySelector("code")); getSelection().removeAllRanges(); getSelection().addRange(r); b.textContent = "Selecciona y copia"; }); setTimeout(() => (b.textContent = "Copiar"), 1800); });
+
+// ---------------------------------------------------------------- pintado del chat
+const ICON = { command: "›_", file: "✎", web: "🌐", tool: "⚙" };
+function toolsHtml(items) {
+  const bad = items.filter((x) => x.status === "failed" || (typeof x.exitCode === "number" && x.exitCode !== 0)).length;
+  return `<details class="tools"><summary>${items.length} acción${items.length === 1 ? "" : "es"}${bad ? ` · ${bad} con error` : ""}</summary>${items.map((x) => `<div class="t${x.status === "failed" || (typeof x.exitCode === "number" && x.exitCode !== 0) ? " err" : ""}"><i>${ICON[x.kind] || "•"}</i><span>${esc(x.text)}</span></div>`).join("")}</details>`;
+}
+function renderMsgs(stick) {
+  const el = $("#msgs"); const atBottom = stick || el.scrollHeight - el.scrollTop - el.clientHeight < 90;
+  let h = ""; let group = [];
+  const flush = () => { if (group.length) { h += toolsHtml(group); group = []; } };
+  for (const m of S.msgs) {
+    const text = (m.message && m.message.parts || []).map((p) => p.text || "").join("\n");
+    if (m.role === "tool") { group.push({ kind: m.kind, text, status: m.status, exitCode: m.exitCode }); continue; }
+    flush();
+    if (m.role === "user") { const long = text.length > 420; h += `<div class="u"><div${long ? ' class="clip"' : ""}>${esc(long ? text.slice(0, 420) + "…" : text)}</div></div>`; }
+    else h += `<div class="a">${md(text)}</div>`;
+  }
+  flush();
+  if (S.job && S.job.running) {
+    const j = S.job;
+    if (j.activity && j.activity.length) h += `<div class="live">${j.activity.map((a) => `<div class="t">${ICON[a.kind] || "•"} ${esc(a.text)}</div>`).join("")}</div>`;
+    h += j.partial ? `<div class="a">${md(j.partial)}</div>` : `<div class="dots"><i></i><i></i><i></i></div>`;
+  }
+  if (S.err) h += `<div class="err-line">${esc(S.err)}</div>`;
+  if (!h) {
+    const w = curWs();
+    h = `<div class="empty"><div class="logo">2</div><h2>¿Qué quieres hacer?</h2><span>${w ? "Proyecto: <b>" + esc(w.name) + "</b>" : "Abre el menú y elige un proyecto"}</span></div>`;
+  }
+  el.innerHTML = h;
+  if (atBottom) el.scrollTop = el.scrollHeight;
+}
+function paintTop() {
+  const m = S.models.find((x) => x.id === (S.model || S.defModel));
+  $("#modelName").textContent = m ? m.name : (S.model || S.defModel || "Modelo");
+  const w = curWs(), s = curSession();
+  $("#modelSub").textContent = (w ? w.name : "") + (s ? " · " + s.title : "") + (S.effort ? " · " + S.effort : "");
+}
+function paintSend() { const b = $("#send"); const run = S.job && S.job.running; b.className = run ? "stop" : ""; b.innerHTML = run ? '<svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>' : '<svg viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"/></svg>'; b.disabled = !run && !$("#txt").value.trim(); }
+
+// ---------------------------------------------------------------- menú lateral
+function paintDrawer() {
+  const q = $("#search").value.trim().toLowerCase(); const el = $("#dscroll"); let h = "";
+  const match = (s, w) => !q || s.title.toLowerCase().includes(q) || w.name.toLowerCase().includes(q);
+  const chat = (s, w, sub, withProj) => `<button class="chat${sub ? " sub" : ""}${s.id === S.sid ? " on" : ""}" data-ws="${esc(w.id)}" data-sid="${esc(s.id)}"><span class="n"><div>${esc(s.title)}</div>${withProj ? `<small>${esc(w.name)}</small>` : ""}</span>${s.status === "running" ? '<span class="run"></span>' : ""}</button>`;
+  h += `<div class="sec">Proyectos</div>`;
+  for (const w of S.ws) {
+    const list = w.sessions.filter((s) => match(s, w));
+    if (q && !list.length) continue;
+    const open = q ? true : !!S.openProj[w.id] || w.id === S.wsId;
+    h += `<button class="proj" data-proj="${esc(w.id)}"><svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg><span class="n">${esc(w.name)}</span><span class="c">${w.sessions.length} ${open ? "▴" : "▾"}</span></button>`;
+    if (open) h += list.map((s) => chat(s, w, true, false)).join("") || `<div class="chat sub" style="color:var(--muted)">Sin conversaciones</div>`;
+  }
+  const recent = [].concat(...S.ws.map((w) => w.sessions.filter((s) => match(s, w)).map((s) => ({ s, w })))).sort((a, b) => b.s.updatedAt - a.s.updatedAt).slice(0, 40);
+  h += `<div class="sec">Recientes</div>` + (recent.map(({ s, w }) => chat(s, w, false, true)).join("") || `<div class="chat" style="color:var(--muted)">No hay conversaciones</div>`);
+  el.innerHTML = h;
+}
+function drawer(on) { $("#drawer").classList.toggle("on", on); $("#scrim").classList.toggle("on", on); if (on) { paintDrawer(); refreshStatus(); } }
+$("#dscroll").addEventListener("click", (e) => {
+  const p = e.target.closest("[data-proj]"); if (p) { const id = p.dataset.proj; S.openProj[id] = !S.openProj[id]; store.set("openProj", S.openProj); paintDrawer(); return; }
+  const c = e.target.closest("[data-sid]"); if (c) { drawer(false); openSession(c.dataset.ws, c.dataset.sid); }
+});
+$("#search").addEventListener("input", paintDrawer);
+$("#newchat").addEventListener("click", () => { drawer(false); newChat(S.wsId || (S.ws[0] && S.ws[0].id)); });
+
+// ---------------------------------------------------------------- hojas (modelo, proyecto, menú)
+function sheet(title, html, bind) { $("#sheetTitle").textContent = title; $("#sheetBody").innerHTML = html; $("#sheet").classList.add("on"); $("#scrim").classList.add("on"); $("#scrim").dataset.sheet = "1"; if (bind) bind($("#sheetBody")); }
+function closeSheet() { $("#sheet").classList.remove("on"); if (!$("#drawer").classList.contains("on")) $("#scrim").classList.remove("on"); delete $("#scrim").dataset.sheet; }
+$("#scrim").addEventListener("click", () => { closeSheet(); drawer(false); });
+$("#modelPill").addEventListener("click", openModels);
+async function openModels() {
+  if (!S.models.length) { try { await loadModels(); } catch (e) { toast(e.message); } }
+  const cur = S.model || S.defModel; const sel = S.models.find((m) => m.id === cur);
+  const efforts = sel ? sel.efforts : [];
+  const sorted = S.models.slice().sort((x, y) => (y.id === cur) - (x.id === cur) || x.name.localeCompare(y.name));
+  const row = (m) => `<button class="opt" data-m="${esc(m.id)}" data-q="${esc((m.name + " " + m.id).toLowerCase())}"><span class="n">${esc(m.name)}<small>${esc(m.id)}${m.id === S.defModel ? " · predeterminado" : ""}</small></span>${m.id === cur ? '<span class="ck">✓</span>' : ""}</button>`;
+  let h = '<input id="mq" placeholder="Buscar modelo" autocomplete="off" style="margin:4px 10px 6px;width:calc(100% - 20px);background:var(--surface2);border:0;border-radius:14px;padding:10px 14px;color:var(--text);font:inherit;outline:0">';
+  if (efforts.length) h += `<div class="chips">${["", ...efforts].map((e) => `<button class="chip${(S.effort || "") === e ? " on" : ""}" data-e="${esc(e)}">${e ? "Razonamiento " + e : "Auto"}</button>`).join("")}</div>`;
+  h += sorted.map(row).join("");
+  sheet("Modelo", h || '<div class="opt">No hay modelos disponibles</div>', (b) => {
+    b.querySelector("#mq").addEventListener("input", (e) => { const q = e.target.value.trim().toLowerCase(); b.querySelectorAll(".opt").forEach((o) => (o.style.display = !q || o.dataset.q.includes(q) ? "" : "none")); });
+    b.addEventListener("click", (e) => {
+      const ef = e.target.closest("[data-e]"); if (ef) { S.effort = ef.dataset.e; store.set("effort", S.effort); paintTop(); openModels(); return; }
+      const o = e.target.closest("[data-m]"); if (o) { S.model = o.dataset.m === S.defModel ? "" : o.dataset.m; store.set("model", S.model); S.effort = ""; store.set("effort", ""); paintTop(); closeSheet(); }
+    });
+  });
+}
+$("#moreBtn").addEventListener("click", () => sheet("Opciones", `<button class="opt" data-a="refresh">Actualizar</button><button class="opt" data-a="shot">Captura del escritorio</button><button class="opt" data-a="unpair" style="color:var(--red)">Desemparejar este teléfono</button>`, (b) => b.addEventListener("click", (e) => {
+  const a = e.target.closest("[data-a]"); if (!a) return; closeSheet();
+  if (a.dataset.a === "refresh") reloadAll(); else if (a.dataset.a === "shot") shot(); else if (confirm("¿Desemparejar este teléfono?")) window.Android && window.Android.unpair();
+})));
+$("#refreshBtn").addEventListener("click", () => { reloadAll(); drawer(false); });
+$("#shotBtn").addEventListener("click", () => { drawer(false); shot(); });
+async function shot() { toast("Pidiendo captura…", true); try { const r = await call({ type: "screenshot" }, 60000); $("#shotImg").src = "data:image/png;base64," + r.image; $("#shot").classList.add("on"); } catch (e) { toast(e.message); } }
+$("#shotClose").addEventListener("click", () => $("#shot").classList.remove("on"));
+$("#menuBtn").addEventListener("click", () => drawer(true));
+$("#closeDrawer").addEventListener("click", () => drawer(false));
+window.__back = () => { if ($("#shot").classList.contains("on")) { $("#shot").classList.remove("on"); return true; } if ($("#sheet").classList.contains("on")) { closeSheet(); return true; } if ($("#drawer").classList.contains("on")) { drawer(false); return true; } return false; };
+
+// ---------------------------------------------------------------- datos
+async function refreshStatus() {
+  try { const r = await call({ type: "status" }, 40000); S.ws = r.workspaces || []; setConn("ok"); S.err = ""; if (!curWs() && S.ws[0]) S.wsId = S.ws[0].id; paintTop(); if ($("#drawer").classList.contains("on")) paintDrawer(); return true; }
+  catch (e) { setConn("bad"); toast("Sin conexión: " + e.message); return false; }
+}
+async function loadModels() { const r = await call({ type: "models" }, 40000); S.models = r.models || []; S.defModel = r.default || ""; if (S.model && !S.models.some((m) => m.id === S.model)) S.model = ""; paintTop(); }
+async function loadMessages(stick) {
+  if (!S.sid) { S.msgs = []; renderMsgs(true); return; }
+  try { const r = await call({ type: "messages", workspaceId: S.wsId, sessionId: S.sid }, 60000); S.msgs = r.messages || []; S.err = ""; setConn("ok"); }
+  catch (e) { S.err = "No se pudo cargar la conversación: " + e.message; setConn("bad"); }
+  renderMsgs(stick);
+}
+async function openSession(wsId, sid) {
+  S.wsId = wsId; S.sid = sid; store.set("wsId", wsId); store.set("sid", sid); S.msgs = []; S.job = null; S.err = "";
+  $("#msgs").innerHTML = '<div class="empty"><div class="dots"><i></i><i></i><i></i></div></div>'; paintTop(); paintSend();
+  await loadMessages(true);
+}
+function newChat(wsId) { if (wsId) { S.wsId = wsId; store.set("wsId", wsId); } S.sid = ""; store.set("sid", ""); S.msgs = []; S.job = null; S.err = ""; paintTop(); renderMsgs(true); paintSend(); $("#txt").focus(); }
+async function reloadAll() { await refreshStatus(); loadModels().catch(() => {}); await loadMessages(true); }
+
+// ---------------------------------------------------------------- enviar / seguir tarea
+async function send() {
+  const text = $("#txt").value.trim();
+  if (S.job && S.job.running) { try { await call({ type: "cancel", workspaceId: S.wsId, sessionId: S.sid }, 30000); toast("Cancelando…", true); } catch (e) { toast(e.message); } return; }
+  if (!text) return;
+  if (!S.wsId) { toast("Elige primero un proyecto en el menú"); return; }
+  $("#txt").value = ""; autosize(); S.err = "";
+  S.msgs.push({ role: "user", message: { parts: [{ type: "text", text }] } }); S.job = { running: true, partial: "", activity: [] }; renderMsgs(true); paintSend();
+  try {
+    const r = await call({ type: "send", workspaceId: S.wsId, sessionId: S.sid || undefined, text, ...(S.model ? { model: S.model } : {}), ...(S.effort ? { effort: S.effort } : {}) }, 60000);
+    S.sid = r.sessionId; store.set("sid", S.sid); S.job.id = r.jobId; paintTop(); follow(r.jobId, S.sid);
+  } catch (e) { S.job = null; S.err = e.message; renderMsgs(true); paintSend(); }
+}
+async function follow(jobId, sid) {
+  let misses = 0;
+  while (S.job && S.job.running && S.job.id === jobId) {
+    await new Promise((r) => setTimeout(r, 1200));
+    if (S.sid !== sid) return;
+    try {
+      const r = await call({ type: "job", jobId }, 40000); misses = 0; const st = r.status;
+      if (S.job && S.job.id === jobId) { S.job.partial = st.partial || ""; S.job.activity = st.activity || []; }
+      if (st.status !== "running") {
+        S.job = null; if (st.status === "error") S.err = st.error || "La tarea falló."; else if (st.status === "cancelled") S.err = "Tarea cancelada.";
+        await loadMessages(true); paintSend(); refreshStatus(); return;
+      }
+      renderMsgs(false);
+    } catch (e) { if (++misses >= 4) { S.job = null; S.err = "Se perdió la conexión con la PC: " + e.message; renderMsgs(true); paintSend(); return; } }
+  }
+}
+const autosize = () => { const t = $("#txt"); t.style.height = "auto"; t.style.height = Math.min(140, t.scrollHeight) + "px"; paintSend(); };
+$("#txt").addEventListener("input", autosize);
+$("#send").addEventListener("click", send);
+
+// ---------------------------------------------------------------- arranque
+(async function init() {
+  paintSend(); renderMsgs(true); setConn("");
+  const ok = await refreshStatus();
+  if (!ok) { S.err = "No se pudo hablar con la PC. Comprueba que ChatGPT 2 sigue encendido y con el control remoto activo."; renderMsgs(true); return; }
+  loadModels().catch(() => {});
+  const w = curWs();
+  if (w && S.sid && w.sessions.some((s) => s.id === S.sid)) await openSession(S.wsId, S.sid);
+  else if (w && w.sessions[0]) await openSession(w.id, w.sessions[0].id);
+  else { S.sid = ""; renderMsgs(true); }
+  paintTop();
+})();
+</script>
+</body>
+</html>

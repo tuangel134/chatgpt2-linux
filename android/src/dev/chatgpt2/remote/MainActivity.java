@@ -37,6 +37,7 @@ import java.net.URI;
 import java.net.URL;
 import java.net.URISyntaxException;
 import java.nio.charset.StandardCharsets;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.ArrayList;
@@ -76,7 +77,10 @@ public final class MainActivity extends Activity {
     /** Snapshot returned by the desktop; it powers the project switcher without exposing secrets. */
     private JSONArray availableWorkspaces = new JSONArray();
     /** Responses pulled for another in-flight relay command must not be discarded. */
-    private final Map<String, JSONObject> pendingRelayResponses = new HashMap<>();
+    private final Map<String, JSONObject> pendingRelayResponses = new ConcurrentHashMap<>();
+    // Interfaz del chat: una página local (assets/app) dentro de un WebView; aquí solo viven el emparejamiento, el cifrado y el relay.
+    private WebView web; private boolean webMode, webLoaded; private LinearLayout rootView, headerView;
+    private final ExecutorService calls = Executors.newFixedThreadPool(4);
     private boolean anywhere;
 	private boolean appUnlocked, unlockInFlight, refreshInFlight, sendInFlight, captureInFlight;
     private Dialog remoteBrowserDialog;
@@ -90,7 +94,7 @@ public final class MainActivity extends Activity {
     private Bitmap remoteBrowserBitmap;
     private float remoteTouchX, remoteTouchY;
     private boolean remoteTouchActive;
-    private final Runnable refreshLoop = new Runnable() { public void run() { if (connected() && appUnlocked) refresh(); main.postDelayed(this, 3500); } };
+    private final Runnable refreshLoop = new Runnable() { public void run() { if (connected() && appUnlocked && !webMode) refresh(); main.postDelayed(this, 3500); } };
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
@@ -107,7 +111,7 @@ public final class MainActivity extends Activity {
         main.postDelayed(refreshLoop, 3500);
     }
 
-    @Override protected void onDestroy() { main.removeCallbacks(refreshLoop); io.shutdownNow(); super.onDestroy(); }
+    @Override protected void onDestroy() { main.removeCallbacks(refreshLoop); io.shutdownNow(); calls.shutdownNow(); if (web != null) web.destroy(); super.onDestroy(); }
 	@Override protected void onPause() { if (connected()) appUnlocked = false; super.onPause(); }
 	@Override protected void onResume() { super.onResume(); if (connected() && !appUnlocked && !unlockInFlight) requestDeviceUnlock(); }
 
@@ -124,11 +128,11 @@ public final class MainActivity extends Activity {
                 int obscured = Math.max(0, root.getRootView().getHeight() - frame.bottom);
                 int keyboardInset = obscured > root.getRootView().getHeight() / 5 ? obscured : 0;
                 int desiredBottom = bottomInset + keyboardInset;
-                if (root.getPaddingBottom() != desiredBottom) root.setPadding(sideInset, topInset, sideInset, desiredBottom);
+                int side = webMode ? 0 : sideInset; if (root.getPaddingBottom() != desiredBottom || root.getPaddingLeft() != side) root.setPadding(side, topInset, side, desiredBottom);
             }
         });
 
-        LinearLayout header = row(); header.setPadding(0, dp(4), 0, dp(12));
+        LinearLayout header = row(); header.setPadding(0, dp(4), 0, dp(12)); headerView = header; rootView = root;
         ImageView mark = new ImageView(this); mark.setImageResource(getResources().getIdentifier("forja_logo_mark", "drawable", getPackageName())); mark.setContentDescription("ChatGPT 2"); mark.setPadding(0, dp(2), dp(8), dp(2)); header.addView(mark, new LinearLayout.LayoutParams(dp(48), dp(44)));
         LinearLayout heading = new LinearLayout(this); heading.setOrientation(LinearLayout.VERTICAL); heading.setPadding(dp(9), 0, 0, 0);
         projectName = label("CHATGPT 2 REMOTE  ▾", 16, TEXT); projectName.setTypeface(Typeface.DEFAULT, Typeface.BOLD); projectName.setOnClickListener(v -> chooseProject()); heading.addView(projectName);
@@ -160,11 +164,52 @@ public final class MainActivity extends Activity {
         Button capture = quietButton("Captura"); capture.setOnClickListener(v -> capture()); actions.addView(capture);
         Button send = accentButton("Enviar ↑"); send.setOnClickListener(v -> send()); actions.addView(send);
         composerShell.addView(actions, fill()); root.addView(composerShell, fill());
+        web = new WebView(this); web.setBackgroundColor(Color.rgb(23, 23, 23)); web.setVisibility(View.GONE);
+        WebSettings ws = web.getSettings();
+        ws.setJavaScriptEnabled(true); ws.setDomStorageEnabled(true);
+        ws.setAllowFileAccess(false); ws.setAllowContentAccess(false); ws.setAllowFileAccessFromFileURLs(false); ws.setAllowUniversalAccessFromFileURLs(false);
+        ws.setJavaScriptCanOpenWindowsAutomatically(false); ws.setSupportMultipleWindows(false); ws.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
+        ws.setTextZoom(100); WebView.setWebContentsDebuggingEnabled(false);
+        web.addJavascriptInterface(new Bridge(), "Android");
+        web.setWebViewClient(new WebViewClient() {
+            @Override public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
+                String url = request.getUrl().toString();
+                if (url.startsWith("https://") || url.startsWith("http://")) { try { startActivity(new Intent(Intent.ACTION_VIEW, request.getUrl())); } catch (Exception ignored) { } }
+                return true; // la página local nunca navega a otro sitio
+            }
+        });
+        root.addView(web, new LinearLayout.LayoutParams(-1, 0, 1));
         setContentView(root);
     }
 
-    private void showPairing() { pendingRelayResponses.clear(); pairingCard.setVisibility(View.VISIBLE); chatScroll.setVisibility(View.GONE); composerShell.setVisibility(View.GONE); connectionDot.setTextColor(MUTED); setProjectTitle(); }
-    private void showChat() { pairingCard.setVisibility(View.GONE); chatScroll.setVisibility(View.VISIBLE); composerShell.setVisibility(View.VISIBLE); setProjectTitle(); connectionDot.setTextColor(GREEN); }
+    private void showPairing() { webMode = false; if (web != null) { web.setVisibility(View.GONE); web.loadUrl("about:blank"); webLoaded = false; } if (headerView != null) headerView.setVisibility(View.VISIBLE); if (rootView != null) rootView.setPadding(dp(16), dp(34), dp(16), dp(10)); pendingRelayResponses.clear(); pairingCard.setVisibility(View.VISIBLE); chatScroll.setVisibility(View.GONE); composerShell.setVisibility(View.GONE); connectionDot.setTextColor(MUTED); setProjectTitle(); }
+    private void showChat() {
+        pairingCard.setVisibility(View.GONE); chatScroll.setVisibility(View.GONE); composerShell.setVisibility(View.GONE); headerView.setVisibility(View.GONE);
+        webMode = true; web.setVisibility(View.VISIBLE); rootView.setPadding(0, dp(34), 0, dp(0));
+        if (!webLoaded) { webLoaded = true; web.loadUrl("file:///android_asset/app/index.html"); }
+    }
+    /** Puente JavaScript ↔ relay: la página pide órdenes (estado, mensajes, enviar...) y aquí se cifran y viajan por el relay. */
+    public final class Bridge {
+        @android.webkit.JavascriptInterface public void call(String id, String json) {
+            calls.execute(() -> {
+                try {
+                    if (!appUnlocked || !connected()) throw new IOException("La app está bloqueada: desbloquéala con el bloqueo de pantalla.");
+                    JSONObject reply = relayRequest(new JSONObject(json));
+                    deliver(id, true, reply.toString());
+                } catch (Exception error) {
+                    String message = String.valueOf(error.getMessage());
+                    if (message.contains("no longer paired") || message.contains("Pairing expired") || message.contains("Pair this device first")) { runOnUiThread(() -> { clearPairing(); setStatus("El escritorio revocó este teléfono. Escanea un QR nuevo."); }); }
+                    deliver(id, false, message);
+                }
+            });
+        }
+        @android.webkit.JavascriptInterface public void unpair() { runOnUiThread(() -> clearPairing()); }
+    }
+    private void deliver(String id, boolean ok, String data) { runOnUiThread(() -> { if (web != null) web.evaluateJavascript("window.__native(" + JSONObject.quote(id) + "," + ok + "," + JSONObject.quote(data) + ")", null); }); }
+    @Override public void onBackPressed() {
+        if (webMode && web != null && web.getVisibility() == View.VISIBLE) { web.evaluateJavascript("window.__back&&window.__back()", value -> { if (!"true".equals(value)) finish(); }); return; }
+        super.onBackPressed();
+    }
     private void setProjectTitle() { projectName.setText((workspaceName.isEmpty() ? "CHATGPT 2 REMOTE" : workspaceName.toUpperCase()) + "  ▾"); }
 	private void requestDeviceUnlock() {
 		if (!connected() || appUnlocked || unlockInFlight) return;
