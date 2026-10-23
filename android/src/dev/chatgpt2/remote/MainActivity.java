@@ -120,7 +120,7 @@ public final class MainActivity extends Activity {
             showPairing();
             // Diagnóstico: distinguir «el sistema borró la llave de seguridad» de «la app llegó sin datos» (instalación limpia o desinstalada antes).
             SharedPreferences p = getPreferences(MODE_PRIVATE);
-            if (!p.getString("secret.relayDeviceToken", "").isEmpty() || !p.getString("relayInstallation", "").isEmpty()) setStatus("Se conservaron los datos pero el teléfono ya no puede leer las claves guardadas (borró la llave de seguridad). Escanea el QR otra vez. v" + versionLabel());
+            if (!p.getString("secret.relayDeviceToken", "").isEmpty() || !p.getString("fsecret.relayDeviceToken", "").isEmpty() || !p.getString("relayInstallation", "").isEmpty()) setStatus("Se conservaron los datos pero el teléfono ya no puede leer las claves guardadas (borró la llave de seguridad). Escanea el QR otra vez. v" + versionLabel());
             else setStatus("Sin emparejar (la app no tenía datos guardados: instalación nueva o desinstalada antes). v" + versionLabel());
         }
         main.postDelayed(refreshLoop, 3500);
@@ -774,31 +774,51 @@ public final class MainActivity extends Activity {
 		}
 		return ((KeyStore.SecretKeyEntry) store.getEntry(KEYSTORE_ALIAS, null)).getSecretKey();
 	}
+	/**
+	 * Los secretos se guardan cifrados con una llave del Android Keystore Y con una copia cifrada con una llave aleatoria en la
+	 * carpeta privada de la app. Algunos teléfonos (Huawei/HarmonyOS...) borran las llaves del Keystore al cerrar o actualizar la app
+	 * y el emparejamiento se perdía; si la llave del Keystore falla se usa la copia y se regraba la del Keystore.
+	 */
+	private SecretKey fileKey() throws Exception {
+		File file = new File(getFilesDir(), "pairing.key");
+		byte[] raw;
+		if (file.exists() && file.length() == 32) { raw = new byte[32]; try (FileInputStream in = new FileInputStream(file)) { int off = 0; while (off < 32) { int n = in.read(raw, off, 32 - off); if (n < 0) break; off += n; } } }
+		else { raw = new byte[32]; new SecureRandom().nextBytes(raw); try (FileOutputStream out = new FileOutputStream(file)) { out.write(raw); } file.setReadable(false, false); file.setReadable(true, true); file.setWritable(false, false); file.setWritable(true, true); }
+		return new SecretKeySpec(raw, "AES");
+	}
+	private String sealWith(SecretKey key, String value) throws Exception {
+		byte[] iv = new byte[12]; new SecureRandom().nextBytes(iv);
+		Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding"); cipher.init(Cipher.ENCRYPT_MODE, key, new GCMParameterSpec(128, iv));
+		return Base64.encodeToString(iv, Base64.URL_SAFE | Base64.NO_WRAP) + "." + Base64.encodeToString(cipher.doFinal(value.getBytes(StandardCharsets.UTF_8)), Base64.URL_SAFE | Base64.NO_WRAP);
+	}
+	private String openWith(SecretKey key, String stored) throws Exception {
+		String[] fields = stored.split("\\.", 2); if (fields.length != 2) throw new IOException("formato");
+		Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+		cipher.init(Cipher.DECRYPT_MODE, key, new GCMParameterSpec(128, Base64.decode(fields[0], Base64.URL_SAFE | Base64.NO_WRAP)));
+		return new String(cipher.doFinal(Base64.decode(fields[1], Base64.URL_SAFE | Base64.NO_WRAP)), StandardCharsets.UTF_8);
+	}
 	private String loadSecret(String name) {
-		String stored = getPreferences(MODE_PRIVATE).getString("secret." + name, "");
+		SharedPreferences prefs = getPreferences(MODE_PRIVATE);
+		String stored = prefs.getString("secret." + name, ""), backup = prefs.getString("fsecret." + name, "");
+		if (!stored.isEmpty()) { try { return openWith(secretKey(), stored); } catch (Exception ignored) { /* llave del Keystore perdida: se prueba la copia */ } }
+		if (!backup.isEmpty()) {
+			try { String value = openWith(fileKey(), backup); saveSecret(name, value); return value; } catch (Exception ignored) { return ""; }
+		}
+		// Migrate credentials written by older builds, then remove the plaintext value.
 		try {
-			if (!stored.isEmpty()) {
-				String[] fields = stored.split("\\.", 2); if (fields.length != 2) return "";
-				Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
-				cipher.init(Cipher.DECRYPT_MODE, secretKey(), new GCMParameterSpec(128, Base64.decode(fields[0], Base64.URL_SAFE | Base64.NO_WRAP)));
-				return new String(cipher.doFinal(Base64.decode(fields[1], Base64.URL_SAFE | Base64.NO_WRAP)), StandardCharsets.UTF_8);
-			}
-			// Migrate credentials written by older builds, then remove the plaintext value.
-			String legacy = getPreferences(MODE_PRIVATE).getString(name, "");
-			if (!legacy.isEmpty()) { saveSecret(name, legacy); getPreferences(MODE_PRIVATE).edit().remove(name).apply(); }
+			String legacy = prefs.getString(name, "");
+			if (!legacy.isEmpty()) { saveSecret(name, legacy); prefs.edit().remove(name).apply(); }
 			return legacy;
 		} catch (Exception ignored) { return ""; }
 	}
 	private void saveSecret(String name, String value) {
-		try {
-			if (value == null || value.isEmpty()) { removeSecret(name); return; }
-			byte[] iv = new byte[12]; new SecureRandom().nextBytes(iv);
-			Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding"); cipher.init(Cipher.ENCRYPT_MODE, secretKey(), new GCMParameterSpec(128, iv));
-			String encoded = Base64.encodeToString(iv, Base64.URL_SAFE | Base64.NO_WRAP) + "." + Base64.encodeToString(cipher.doFinal(value.getBytes(StandardCharsets.UTF_8)), Base64.URL_SAFE | Base64.NO_WRAP);
-			getPreferences(MODE_PRIVATE).edit().putString("secret." + name, encoded).remove(name).apply();
-		} catch (Exception ignored) { /* Pairing will fail closed if the device keystore is unavailable. */ }
+		if (value == null || value.isEmpty()) { removeSecret(name); return; }
+		SharedPreferences.Editor edit = getPreferences(MODE_PRIVATE).edit().remove(name);
+		try { edit.putString("secret." + name, sealWith(secretKey(), value)); } catch (Exception ignored) { /* sin Keystore: queda la copia de la carpeta privada */ }
+		try { edit.putString("fsecret." + name, sealWith(fileKey(), value)); } catch (Exception ignored) { }
+		edit.apply();
 	}
-	private void removeSecret(String name) { getPreferences(MODE_PRIVATE).edit().remove("secret." + name).remove(name).apply(); }
+	private void removeSecret(String name) { getPreferences(MODE_PRIVATE).edit().remove("secret." + name).remove("fsecret." + name).remove(name).apply(); }
 	private String read(InputStream in) throws IOException { if (in == null) return ""; ByteArrayOutputStream out = new ByteArrayOutputStream(); byte[] bytes = new byte[4096]; for (int n; (n = in.read(bytes)) >= 0;) { if (out.size() + n > MAX_RESPONSE_BYTES) throw new IOException("La respuesta de ChatGPT 2 es demasiado grande."); out.write(bytes, 0, n); } return out.toString("UTF-8"); }
     private boolean connected() { return anywhere ? (!relayInstallation.isEmpty() && !relayEncryptionKey.isEmpty() && !relayDeviceToken.isEmpty()) || !localToken.isEmpty() : !token.isEmpty(); }
     /**
