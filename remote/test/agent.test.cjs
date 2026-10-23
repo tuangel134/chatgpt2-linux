@@ -10,12 +10,13 @@ const os = require("node:os");
 const path = require("node:path");
 const { createRelay } = require("./fake-relay.cjs");
 const { Phone } = require("./phone.cjs");
+const { createFakeIpc } = require("./fake-ipc.cjs");
 const { humanRrule } = require("../agent.cjs");
 
 const RELAY_PORT = 18910, AGENT_PORT = 18911;
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), "c2remote-"));
 const TOKEN = "hub-token-de-prueba";
-let agent, relay, phone;
+let agent, relay, phone, desktop;
 
 const control = async (method, p, body) => {
   const r = await fetch(`http://127.0.0.1:${AGENT_PORT}${p}`, { method, headers: { "X-Hub-Token": TOKEN, "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
@@ -27,6 +28,7 @@ test.before(async () => {
   await new Promise((r) => relay.server.listen(RELAY_PORT, "127.0.0.1", r));
   fs.mkdirSync(path.join(TMP, "codex-home"), { recursive: true });
   fs.writeFileSync(path.join(TMP, "codex-home", "hub-token"), TOKEN);
+  desktop = createFakeIpc(path.join(TMP, "codex-home")); await desktop.listen();
   const adir = path.join(TMP, "codex-home", "automations");
   for (const [id, name, rr, st] of [["a-tarde", "Publicar tarde", "RRULE:FREQ=DAILY;BYHOUR=15,21;BYMINUTE=0;BYSECOND=0", "ACTIVE"], ["a-lunes", "Resumen semanal", "RRULE:FREQ=WEEKLY;BYDAY=MO,WE;BYHOUR=9;BYMINUTE=30", "PAUSED"]]) {
     fs.mkdirSync(path.join(adir, id), { recursive: true });
@@ -45,7 +47,7 @@ test.before(async () => {
   phone = new Phone(s.body.pairingPayload);
   assert.equal((await phone.pair()).status, 200);
 });
-test.after(() => { agent && agent.kill(); relay && relay.server.close(); fs.rmSync(TMP, { recursive: true, force: true }); });
+test.after(() => { agent && agent.kill(); desktop && desktop.close(); relay && relay.server.close(); fs.rmSync(TMP, { recursive: true, force: true }); });
 
 test("control local exige el token del hub y rechaza páginas web", async () => {
   assert.equal((await fetch(`http://127.0.0.1:${AGENT_PORT}/status`)).status, 403);
@@ -204,15 +206,43 @@ test("leer archivos: por trozos dentro de zonas permitidas; fuera de ellas, no",
   assert.equal((await phone.ask({ type: "file", path: link })).ok, false);                                       // un enlace simbólico no saca de la zona
 });
 
-test("conversación bloqueada por la app de escritorio: sigue sola en una copia y la recuerda", async () => {
+test("conversación abierta en la app de escritorio: se escribe en la MISMA conversación por su IPC, en vivo y sin copias", async () => {
   const ws = (await phone.ask({ type: "status" })).workspaces.find((w) => w.name === "web");
-  const wait = async (id) => { let st; for (let i = 0; i < 40; i++) { st = (await phone.ask({ type: "job", jobId: id })).status; if (st.status !== "running") break; await new Promise((x) => setTimeout(x, 50)); } return st; };
-  const f = await phone.ask({ type: "send", workspaceId: ws.id, sessionId: "t-busy", text: "sigue" });
-  assert.equal(f.ok, true); assert.match(f.sessionId, /^t-fork-/); assert.equal(f.forkedFrom, "t-busy");   // sin error, en otro hilo
-  assert.equal((await wait(f.jobId)).status, "done");
-  const g = await phone.ask({ type: "send", workspaceId: ws.id, sessionId: "t-busy", text: "otra vez" });
-  assert.equal(g.sessionId, f.sessionId);                                                                  // reutiliza la misma copia
-  await wait(g.jobId);
+  const f = await phone.ask({ type: "send", workspaceId: ws.id, sessionId: "t-busy", text: "hola desde el teléfono", model: "m-x", effort: "high" });
+  assert.equal(f.ok, true, JSON.stringify(f)); assert.equal(f.sessionId, "t-busy");                         // mismo hilo, nada de copias
+  const call = desktop.calls.filter((c) => c.method === "thread-follower-start-turn").pop();
+  assert.equal(call.hostId, "local"); assert.equal(call.version, 3);
+  assert.equal(call.params.conversationId, "t-busy"); assert.equal(call.params.turnStart.request.threadId, "t-busy");
+  assert.equal(call.params.turnStart.request.model, "m-x"); assert.equal(call.params.turnStart.request.effort, "high");
+  let live = false, st;
+  for (let i = 0; i < 80; i++) { st = (await phone.ask({ type: "job", jobId: f.jobId })).status; if (st.partial === "Hola desde la PC" || (st.partial && st.activity)) live = true; if (st.status !== "running") break; await new Promise((x) => setTimeout(x, 25)); }
+  assert.equal(live, true, "se vio el texto en vivo");
+  assert.equal(st.status, "done"); assert.equal(st.result, "Hola desde la PC");
+  const m = (await phone.ask({ type: "messages", workspaceId: ws.id, sessionId: "t-busy" })).messages;      // el historial sale del estado en vivo de la PC
+  assert.deepEqual(m.slice(-3).map((x) => x.role + ":" + x.message.parts[0].text), ["user:hola desde el teléfono", "tool:ls", "assistant:Hola desde la PC"]);
+});
+
+test("lo que pasa en la PC se ve desde el teléfono (poll) y se puede detener", async () => {
+  const ws = (await phone.ask({ type: "status" })).workspaces.find((w) => w.name === "web");
+  const idle = await phone.ask({ type: "poll", sessionId: "t-busy" }); assert.equal(idle.running, false);
+  // la PC empieza una tarea lenta por su cuenta (no la lanzó el teléfono)
+  const { IpcClient } = require("../ipc.cjs"); const other = new IpcClient(path.join(TMP, "codex-home")); 
+  const r = await other.call("thread-follower-start-turn", { conversationId: "t-busy", turnStart: { request: { threadId: "t-busy", input: [{ type: "text", text: "tarea lenta", text_elements: [] }] }, context: {} } });
+  let p; for (let i = 0; i < 40; i++) { p = await phone.ask({ type: "poll", sessionId: "t-busy" }); if (p.running) break; await new Promise((x) => setTimeout(x, 50)); }
+  assert.equal(p.running, true); assert.equal(p.turnId, r.result.turn.id);
+  const c = await phone.ask({ type: "cancel", workspaceId: ws.id, sessionId: "t-busy" }); assert.equal(c.cancelled, true);
+  const ic = desktop.calls.filter((x) => x.method === "thread-follower-interrupt-turn").pop();
+  assert.equal(ic.params.expectedTurnId, r.result.turn.id); assert.equal(ic.params.mode, "user-stop"); assert.equal(ic.version, 5);
+  for (let i = 0; i < 40; i++) { p = await phone.ask({ type: "poll", sessionId: "t-busy" }); if (!p.running) break; await new Promise((x) => setTimeout(x, 50)); }
+  assert.equal(p.running, false);
+});
+
+test("/compactar en una conversación de la PC usa la orden de la propia app", async () => {
+  const ws = (await phone.ask({ type: "status" })).workspaces.find((w) => w.name === "web");
+  const c = await phone.ask({ type: "slash", workspaceId: ws.id, sessionId: "t-busy", cmd: "compact" }); assert.equal(c.ok, true, JSON.stringify(c));
+  let st; for (let i = 0; i < 80; i++) { st = (await phone.ask({ type: "job", jobId: c.jobId })).status; if (st.status !== "running") break; await new Promise((x) => setTimeout(x, 50)); }
+  assert.equal(st.status, "done"); assert.equal(st.result, "Contexto compactado.");
+  assert.equal(desktop.calls.filter((x) => x.method === "thread-follower-compact-thread").pop().version, 2);
 });
 
 test("comandos «/»: compactar, revisar, renombrar, objetivo, estado, mcp, skills, archivos, diff, permisos, fork, archivar", async () => {

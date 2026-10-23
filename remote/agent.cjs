@@ -17,6 +17,8 @@ const crypto = require("node:crypto");
 const cp = require("node:child_process");
 const readline = require("node:readline");
 const { qrRows } = require("./qr.cjs");
+const { IpcClient } = require("./ipc.cjs");
+const { Follower, turnsOf, isActive } = require("./follow.cjs");
 
 const HOME = os.homedir();
 const CODEX_HOME = process.env.CODEX_HOME || path.join(HOME, ".codex-2");
@@ -183,7 +185,17 @@ class AppServer {
   kill() { try { this.p && this.p.kill(); } catch {} }
 }
 const codex = new AppServer();
+const ipc = new IpcClient(CODEX_HOME, (...a) => log(...a));
+const follower = new Follower(ipc, (...a) => log(...a), (id, state) => onFollowChange(id, state));
+follower.keep = (id) => [...jobs.values()].some((j) => j.owner && j.threadId === id && j.status === "running");
 const jobs = new Map();       // jobId -> {threadId, turnId, status, error, sessionId, text}
+// Al terminar un turno propio se suelta la conversación para que la app de la PC pueda abrirla y escribir en ella.
+function releaseLater(threadId) {
+  setTimeout(() => {
+    if ([...jobs.values()].some((j) => j.threadId === threadId && j.status === "running")) return;
+    codex.call("thread/unsubscribe", { threadId }, 10000).catch(() => {}); loaded.delete(threadId);
+  }, 2500).unref?.();
+}
 const usage = new Map();      // hilo -> último uso de contexto (para /estado)
 const loaded = new Set();     // hilos ya reanudados en este app-server
 codex.onNotify = (m) => {
@@ -195,6 +207,7 @@ codex.onNotify = (m) => {
       if (p.turn.status === "failed") { j.status = "error"; j.error = (p.turn.error && (p.turn.error.message || JSON.stringify(p.turn.error))) || "El turno falló."; }
       else if (p.turn.status === "interrupted") { j.status = "cancelled"; }
       else j.status = "done";
+      if (!j.owner) releaseLater(p.threadId);
     }
   } else if (m.method === "error" && p.willRetry === false) {
     for (const j of jobs.values()) if (j.threadId === p.threadId && j.status === "running") { j.status = "error"; j.error = (p.error && p.error.message) || "Error del modelo."; }
@@ -264,7 +277,15 @@ async function rootOf(workspaceId) {
 
 async function messages(workspaceId, sessionId, limit) {
   const r = await codex.call("thread/turns/list", { threadId: sessionId, limit: Math.min(40, Math.max(1, limit || 30)), sortDirection: "desc", itemsView: "full" });
-  const turns = (r.data || []).slice().reverse();
+  let turns = (r.data || []).slice().reverse();
+  // Si la app de la PC tiene la conversación, su estado en vivo manda: el disco va unos segundos atrasado y marca como «interrupted» el turno que está corriendo.
+  const state = await follower.ensure(sessionId, 2500).catch(() => null);
+  if (state) {
+    const live = turnsOf(state), byId = new Map(live.map((t) => [t.turnId, t])), lastId = turns.length ? turns[turns.length - 1].id : "";
+    turns = turns.map((t) => (byId.has(t.id) ? { id: t.id, items: byId.get(t.id).items || [] } : t));
+    const ids = new Set(turns.map((t) => t.id));
+    for (const t of live) if (!ids.has(t.turnId) && (!lastId || t.turnId > lastId)) turns.push({ id: t.turnId, items: t.items || [] });
+  }
   const out = [];
   const part = (t) => ({ message: { parts: [{ type: "text", text: t }] } });
   for (const turn of turns) for (const item of turn.items || []) {
@@ -294,43 +315,116 @@ async function ensureLoaded(threadId) {
   loaded.add(threadId);
 }
 
+// Cada cambio que manda la app de la PC (texto que se escribe, comandos, fin del turno) actualiza las tareas que lanzó el teléfono.
+const textOfLast = (t) => { const it = (t.items || []); const last = it[it.length - 1]; return last && last.type === "agentMessage" ? String(last.text || "") : ""; };
+function onFollowChange(threadId, state) {
+  if (state.latestTokenUsageInfo) usage.set(threadId, state.latestTokenUsageInfo);
+  for (const j of jobs.values()) {
+    if (!j.owner || j.status !== "running" || j.threadId !== threadId) continue;
+    if (j.kind === "compact") { if (isActive(state)) j.sawActive = true; else if (j.sawActive || Date.now() - j.at > 8000) { j.status = "done"; j.text = "Contexto compactado."; } continue; }
+    const t = turnsOf(state).find((x) => x.turnId === j.turnId); if (!t) continue;
+    const v = turnView(t); j.activity = v.activity;
+    if (!t.status || t.status === "inProgress") { j.partial = textOfLast(t); j.text = ""; continue; }
+    j.partial = ""; j.text = v.text;
+    if (t.status === "failed") { j.status = "error"; j.error = (t.error && (t.error.message || JSON.stringify(t.error))) || "El turno falló."; }
+    else if (t.status === "interrupted") j.status = "cancelled";
+    else j.status = "done";
+  }
+}
+async function lastTurns(threadId, n) {
+  const r = await codex.call("thread/turns/list", { threadId, limit: n || 2, sortDirection: "desc", itemsView: "full" });
+  return r.data || [];
+}
+// Estado de un turno leído del historial (sirve para turnos que corre la app de la PC, de los que no llegan notificaciones).
+function turnView(turn) {
+  const activity = [];
+  let text = "";
+  for (const item of turn.items || []) {
+    if (item.type === "agentMessage" && item.text) text = item.text;
+    const a = activityOf(item); if (a) { activity.push({ ...a, id: item.id }); if (activity.length > 8) activity.shift(); }
+  }
+  return { activity, text };
+}
+// Respaldo por si el seguimiento en vivo falla: lee el historial del disco. Ojo: un turno que corre en otro proceso se lee ahí como
+// «interrupted» hasta que termina, así que solo se confía en «completed» y «failed».
+function watchOwnerJob(jobId) {
+  const j = jobs.get(jobId); if (!j) return;
+  let misses = 0;
+  const timer = setInterval(async () => {
+    if (j.status !== "running") return clearInterval(timer);
+    if (Date.now() - j.at > 6 * 3600_000) { j.status = "error"; j.error = "La tarea tardó demasiado."; return clearInterval(timer); }
+    if (j.kind === "compact" && Date.now() - j.at > 120_000) { j.status = "done"; j.text = "Contexto compactado."; return clearInterval(timer); }
+    if (j.kind === "compact") return;
+    try {
+      const turn = (await lastTurns(j.threadId, 3)).find((t) => t.id === j.turnId);
+      if (!turn) { if (++misses > 30) { j.status = "error"; j.error = "No encuentro el turno en el historial."; clearInterval(timer); } return; }
+      if (turn.status === "completed" || turn.status === "failed") {
+        const v = turnView(turn); j.activity = v.activity; j.partial = ""; j.text = v.text;
+        if (turn.status === "failed") { j.status = "error"; j.error = (turn.error && (turn.error.message || JSON.stringify(turn.error))) || "El turno falló."; } else j.status = "done";
+        clearInterval(timer);
+      }
+    } catch { /* un fallo suelto al leer no corta el seguimiento */ }
+  }, 3000);
+  timer.unref?.();
+}
+// Resumen barato del estado de una conversación: el teléfono lo consulta cada pocos segundos para enterarse de lo que se hace en la PC.
+async function pollThread(threadId) {
+  const state = await follower.ensure(threadId, 2500);
+  if (state) {
+    const run = turnsOf(state).filter((t) => !t.status || t.status === "inProgress").pop(), last = turnsOf(state).pop();
+    const t = run || last;
+    const v = t ? turnView(t) : { activity: [] };
+    return { rev: String(t ? t.turnId + ":" + (t.status || "") + ":" + (t.items || []).length : "0"), running: isActive(state) || !!run, turnId: t ? t.turnId : "", activity: run ? v.activity : [], partial: run ? textOfLast(run) : "", live: true };
+  }
+  const t = (await lastTurns(threadId, 1))[0];
+  if (!t) return { rev: "0", running: false, activity: [] };
+  return { rev: `${t.id}:${t.status}:${(t.items || []).length}`, running: false, turnId: t.id, activity: [] };   // sin seguimiento en vivo no se sabe si corre (el disco marca «interrupted» durante el turno)
+}
+async function runningTurn(threadId) {
+  const state = follower.get(threadId) || await follower.ensure(threadId, 1500);
+  if (state) return turnsOf(state).filter((t) => !t.status || t.status === "inProgress").map((t) => ({ id: t.turnId })).pop() || (isActive(state) ? { id: "" } : null);
+  try { return (await lastTurns(threadId, 1)).find((t) => t.status === "inProgress") || null; } catch { return null; }
+}
+
 async function start(workspaceId, sessionId, text, model, effort, attachments, fork, ephemeral) {
   model = (typeof model === "string" && model.trim()) || settings.model || "";
   const root = await rootOf(workspaceId);
-  let threadId = sessionId, forkedFrom = "";
+  const input = [], files = [];
+  for (const a of Array.isArray(attachments) ? attachments.slice(0, 8) : []) { const f = uploadedFile(a && a.id); files.push(f); input.push(IMAGE_EXT.test(f.path) ? { type: "localImage", path: f.path } : { type: "mention", name: f.name, path: f.path }); }
+  const full = files.length ? `${text}\n\n[Archivos adjuntos]\n${files.map((f) => `- ${f.name}: ${f.path}`).join("\n")}` : text;
+  input.unshift({ type: "text", text: full, text_elements: [] });
+  const eff = typeof effort === "string" && /^[a-z]{3,10}$/.test(effort) ? effort : "";
+  let threadId = sessionId;
   if (threadId) {
     if ([...jobs.values()].some((j) => j.threadId === threadId && j.status === "running")) throw new Error("Ya hay una tarea en curso en esta conversación. Espera o cancélala.");
-    const prior = settings.forks && settings.forks[threadId];
-    if (prior) { try { await ensureLoaded(prior); threadId = prior; forkedFrom = sessionId; } catch { delete settings.forks[sessionId]; saveSettings(); } }
-    if (threadId === sessionId) {
-      try { await ensureLoaded(threadId); }
-      catch (e) {
-        if (!/active writer/i.test(String(e.message))) throw e;
-        // La app de escritorio mantiene bloqueada la conversación (aunque esté parada) y solo puede escribir un proceso a la vez:
-        // se sigue en una copia con todo el historial y se recuerda para los mensajes siguientes.
-        const f = await codex.call("thread/fork", { threadId, excludeTurns: true, approvalPolicy: "never", sandbox: settings.permission });
-        settings.forks = { ...(settings.forks || {}), [sessionId]: f.thread.id }; saveSettings();
-        threadId = f.thread.id; loaded.add(threadId); forkedFrom = sessionId;
-      }
+    // Si la app de la PC tiene la conversación, la orden se la damos a ella (misma conversación, sin copias): ambos lados ven lo mismo al instante.
+    if (await follower.owns(threadId)) {
+      await follower.ensure(threadId, 3000);
+      if (await runningTurn(threadId)) throw new Error("La conversación está respondiendo en la PC. Espera a que termine o detenla.");
+      const r = await ipc.call("thread-follower-start-turn", { conversationId: threadId, turnStart: { request: { threadId, input, ...(model ? { model } : {}), ...(eff ? { effort: eff } : {}) }, context: {} } }, { timeoutMs: 30000 });
+      const jobId = newJob({ threadId, turnId: r.result.turn.id, sessionId: threadId, owner: true });
+      watchOwnerJob(jobId);
+      return { jobId, sessionId: threadId };
+    }
+    try { await ensureLoaded(threadId); }
+    catch (e) {
+      if (!/active writer/i.test(String(e.message))) throw e;
+      const err = new Error("Otra app tiene bloqueada esta conversación y no se puede escribir ahora. Intenta de nuevo en un momento."); err.code = "busy"; throw err;
     }
   } else {
     const t = await codex.call("thread/start", { cwd: root, approvalPolicy: "never", sandbox: settings.permission, ...(ephemeral ? { ephemeral: true } : {}), ...(model ? { model } : {}) });
     threadId = t.thread.id; loaded.add(threadId);
   }
-  const input = [], files = [];
-  for (const a of Array.isArray(attachments) ? attachments.slice(0, 8) : []) { const f = uploadedFile(a && a.id); files.push(f); input.push(IMAGE_EXT.test(f.path) ? { type: "localImage", path: f.path } : { type: "mention", name: f.name, path: f.path }); }
-  const full = files.length ? `${text}\n\n[Archivos adjuntos]\n${files.map((f) => `- ${f.name}: ${f.path}`).join("\n")}` : text;
-  input.unshift({ type: "text", text: full, text_elements: [] });
-  const r = await codex.call("turn/start", { threadId, input, approvalPolicy: "never", ...(model ? { model } : {}), ...(typeof effort === "string" && /^[a-z]{3,10}$/.test(effort) ? { effort } : {}) });
-  const jobId = crypto.randomUUID();
-  jobs.set(jobId, { threadId, turnId: r.turn.id, status: "running", error: "", sessionId: threadId, text: "", partial: "", itemId: "", activity: [], at: Date.now() });
-  for (const [k, j] of jobs) if (j.status !== "running" && Date.now() - j.at > 3600_000) jobs.delete(k);
-  return { jobId, sessionId: threadId, ...(forkedFrom ? { forkedFrom } : {}) };
+  const r = await codex.call("turn/start", { threadId, input, approvalPolicy: "never", ...(model ? { model } : {}), ...(eff ? { effort: eff } : {}) });
+  const jobId = newJob({ threadId, turnId: r.turn.id, sessionId: threadId });
+  return { jobId, sessionId: threadId };
 }
 async function cancel(workspaceId, sessionId) {
   const j = [...jobs.values()].find((x) => x.threadId === sessionId && x.status === "running");
-  if (!j) return { cancelled: false };
-  await codex.call("turn/interrupt", { threadId: j.threadId, turnId: j.turnId });
+  const turnId = (j ? j.turnId : (await runningTurn(sessionId) || {}).id) || undefined;
+  if (!j && !turnId) return { cancelled: false };
+  if (await ipc.ownsThread(sessionId)) await ipc.call("thread-follower-interrupt-turn", { conversationId: sessionId, mode: "user-stop", expectedTurnId: turnId });
+  else await codex.call("turn/interrupt", { threadId: sessionId, turnId });
   return { cancelled: true };
 }
 function job(jobId) {
@@ -433,14 +527,21 @@ function automations() {
 // ------------------------------------------------------------------ comandos «/» (los mismos de Codex que tienen equivalente en el teléfono)
 async function needWriter(threadId) {
   try { await ensureLoaded(threadId); }
-  catch (e) { if (/active writer/i.test(String(e.message))) { const err = new Error("Esa conversación la tiene en uso la app de ChatGPT 2 en la PC (por ejemplo una automatización). Usa /bifurcar para seguir en una copia."); err.code = "busy"; throw err; } throw e; }
+  catch (e) { if (/active writer/i.test(String(e.message))) { const err = new Error("Esa acción no se puede hacer desde el teléfono mientras la app de la PC tiene la conversación abierta. Hazla desde la PC (o usa /bifurcar para trabajar en una copia)."); err.code = "busy"; throw err; } throw e; }
 }
 const sid = (c) => { const v = typeof c.sessionId === "string" ? c.sessionId : ""; if (!/^[\w-]{4,64}$/.test(v)) throw new Error("Primero abre o crea una conversación."); return v; };
-function newJob(extra) { const jobId = crypto.randomUUID(); jobs.set(jobId, { status: "running", error: "", text: "", partial: "", itemId: "", activity: [], at: Date.now(), ...extra }); return jobId; }
+function newJob(extra) { const jobId = crypto.randomUUID(); jobs.set(jobId, { status: "running", error: "", text: "", partial: "", itemId: "", activity: [], at: Date.now(), ...extra }); for (const [k, j] of jobs) if (j.status !== "running" && Date.now() - j.at > 3600_000) jobs.delete(k); return jobId; }
 async function slash(c) {
   switch (c.cmd) {
     case "compact": {
-      const threadId = sid(c); await needWriter(threadId); await codex.call("thread/compact/start", { threadId });
+      const threadId = sid(c);
+      if (await follower.owns(threadId)) {
+        await follower.ensure(threadId, 3000);
+        await ipc.call("thread-follower-compact-thread", { conversationId: threadId });
+        const jobId = newJob({ kind: "compact", threadId, turnId: "", sessionId: threadId, owner: true }); watchOwnerJob(jobId);
+        return { jobId, sessionId: threadId };
+      }
+      await needWriter(threadId); await codex.call("thread/compact/start", { threadId });
       const jobId = newJob({ kind: "compact", threadId, turnId: "", sessionId: threadId });
       setTimeout(() => { const j = jobs.get(jobId); if (j && j.status === "running") { j.status = "done"; j.text = "Contexto compactado."; } }, 120000).unref?.();
       return { jobId, sessionId: threadId };
@@ -458,7 +559,7 @@ async function slash(c) {
       return { jobId: newJob({ threadId: id, turnId: r.turn.id, sessionId: id }), sessionId: id };
     }
     case "rename": { const name = String(c.name || "").trim().slice(0, 120); if (!name) throw new Error("Escribe el nombre nuevo: /renombrar mi nombre."); await codex.call("thread/name/set", { threadId: sid(c), name }); return { name }; }
-    case "archive": { const threadId = sid(c); await codex.call("thread/archive", { threadId }); loaded.delete(threadId); for (const [k, v] of Object.entries(settings.forks || {})) if (v === threadId) delete settings.forks[k]; saveSettings(); return {}; }
+    case "archive": { const threadId = sid(c); await codex.call("thread/archive", { threadId }); loaded.delete(threadId); return {}; }
     case "fork": { const f = await codex.call("thread/fork", { threadId: sid(c), excludeTurns: true, approvalPolicy: "never", sandbox: settings.permission }); loaded.add(f.thread.id); return { sessionId: f.thread.id, title: title(f.thread) }; }
     case "goal": {
       const threadId = sid(c), act = String(c.action || "get");
@@ -470,6 +571,7 @@ async function slash(c) {
       const out = { permission: settings.permission, model: settings.model || "", relay: state ? state.relayUrl : "" };
       if (!out.model) { try { const m = /^model\s*=\s*"([^"]+)"/m.exec(fs.readFileSync(path.join(CODEX_HOME, "config.toml"), "utf8")); if (m) out.model = m[1]; } catch {} }
       if (typeof c.sessionId === "string" && /^[\w-]{4,64}$/.test(c.sessionId)) {
+        await follower.ensure(c.sessionId, 1500).catch(() => null);
         try {
           const t = (await codex.call("thread/read", { threadId: c.sessionId, includeTurns: false })).thread;
           out.thread = { id: t.id, name: t.name || "", cwd: t.cwd, model: t.model || "", provider: t.modelProvider || "", createdAt: t.createdAt, updatedAt: t.updatedAt, status: t.status && t.status.type, branch: t.gitInfo && t.gitInfo.branch || "" };
@@ -538,6 +640,7 @@ async function handleCommand(c) {
       return { ok: true, ...(await start(str("workspaceId"), str("sessionId") || undefined, text, c.model, c.effort, c.attachments, c.fork === true, c.ephemeral === true)) };
     }
     case "models": return { ok: true, ...(await models()) };
+    case "poll": { if (!str("sessionId")) throw new Error("Falta sessionId."); return { ok: true, ...(await pollThread(str("sessionId"))) }; }
     case "slash": return { ok: true, ...(await slash(c)) };
     case "automations": return { ok: true, automations: automations(), now: Date.now() };
     case "upload": return { ok: true, ...uploadChunk(c) };

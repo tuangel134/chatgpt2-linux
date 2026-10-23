@@ -403,11 +403,11 @@ async function loadMessages(stick) {
   renderMsgs(stick);
 }
 async function openSession(wsId, sid) {
-  S.wsId = wsId; S.sid = sid; store.set("wsId", wsId); store.set("sid", sid); S.msgs = []; S.job = null; S.err = "";
+  EXT.turn = null; S.wsId = wsId; S.sid = sid; store.set("wsId", wsId); store.set("sid", sid); S.msgs = []; S.job = null; S.err = "";
   $("#msgs").innerHTML = '<div class="empty"><div class="dots"><i></i><i></i><i></i></div></div>'; paintTop(); paintSend();
   await loadMessages(true);
 }
-function newChat(wsId) { S.ephemeral = false; if (wsId) { S.wsId = wsId; store.set("wsId", wsId); } S.sid = ""; store.set("sid", ""); S.msgs = []; S.job = null; S.err = ""; paintTop(); renderMsgs(true); paintSend(); $("#txt").focus(); }
+function newChat(wsId) { EXT.turn = null; S.ephemeral = false; if (wsId) { S.wsId = wsId; store.set("wsId", wsId); } S.sid = ""; store.set("sid", ""); S.msgs = []; S.job = null; S.err = ""; paintTop(); renderMsgs(true); paintSend(); $("#txt").focus(); }
 async function reloadAll() { await refreshStatus(); loadModels().catch(() => {}); await loadMessages(true); }
 
 // ---------------------------------------------------------------- adjuntos (se comprimen las fotos y se suben por trozos cifrados)
@@ -503,6 +503,33 @@ async function follow(jobId, sid) {
 const autosize = () => { const t = $("#txt"); t.style.height = "auto"; t.style.height = Math.min(140, t.scrollHeight) + "px"; paintSend(); };
 $("#txt").addEventListener("input", autosize);
 $("#send").addEventListener("click", send);
+
+// ---------------------------------------------------------------- lo que pasa en la PC (la app de escritorio escribe en la misma conversación)
+// Mientras se mira una conversación se consulta su estado: si la PC está respondiendo se ve en vivo (con botón de detener),
+// y los mensajes nuevos que se manden desde la PC aparecen solos.
+const EXT = { turn: null, busy: false };
+async function pollExternal() {
+  if (EXT.busy || document.hidden || !S.sid || S.eph[S.sid] || (S.job && !S.job.ext)) return;
+  EXT.busy = true; const sid = S.sid;
+  try {
+    const r = await call({ type: "poll", sessionId: sid }, 20000);
+    if (S.sid !== sid || (S.job && !S.job.ext)) return;
+    const changed = EXT.turn !== null && r.turnId && r.turnId !== EXT.turn;
+    if (r.turnId) EXT.turn = r.turnId;
+    if (r.running) {
+      const first = !S.job;
+      S.job = { running: true, ext: true, partial: r.partial || "", activity: r.activity || [], id: "ext" };
+      if (first || changed) await loadMessages(true); else renderMsgs(false);
+      if (first) paintSend();
+    } else if (S.job && S.job.ext) {
+      S.job = null; paintSend(); await loadMessages(true); setTimeout(() => S.sid === sid && !S.job && loadMessages(false), 4000);
+    } else if (changed) await loadMessages(true);
+    setConn("ok");
+  } catch { /* sin conexión: el aviso de estado ya lo muestra el resto de la app */ }
+  finally { EXT.busy = false; }
+}
+setInterval(() => { pollExternal(); }, 3000);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) pollExternal(); });
 
 
 // ---------------------------------------------------------------- comandos «/» (los de Codex que tienen sentido en el teléfono)
