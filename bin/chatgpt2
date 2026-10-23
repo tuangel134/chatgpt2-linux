@@ -1,0 +1,43 @@
+#!/bin/sh
+# ChatGPT 2 · lanzador. Levanta (si hace falta) el proxy CLIProxyAPI :8317, el hub de modelos :8318 y el
+# Master MCP :8319, y abre la app con perfil propio (no toca tu ChatGPT/Codex normal).
+# Variables opcionales: CHATGPT2_HOME (carpeta de la app), CODEX_HOME (datos), CHATGPT2_FLAGS (flags extra de Electron, p. ej. --no-sandbox o --remote-debugging-port=9333).
+self="$(readlink -f "$0")"
+ROOT="${CHATGPT2_HOME:-$(dirname "$(dirname "$self")")}"
+export CHATGPT2_HOME="$ROOT"
+export CODEX_HOME="${CODEX_HOME:-$HOME/.codex-2}"
+PY="$(command -v python3)"
+NODE="$(command -v node)"
+
+is_listening() {
+  "$PY" -c 'import socket,sys
+try:
+  s=socket.create_connection(("127.0.0.1",int(sys.argv[1])),.3)
+  s.close()
+except OSError: sys.exit(1)' "$1"
+}
+
+mkdir -p "$CODEX_HOME"
+
+# chatgpt2 --local-login : entrar sin cuenta de ChatGPT usando la clave local del hub (solo vale para los modelos del hub)
+if [ "$1" = "--local-login" ]; then
+  "$PY" -I "$ROOT/modelhub/modelhub.py" init >/dev/null 2>&1
+  KEY="$(sed -n 's/.*"\(sk-local-[a-f0-9]*\)".*/\1/p' "$ROOT/cliproxyapi/config.yaml" | head -1)"
+  [ -n "$KEY" ] || { echo "No hay clave local; ejecuta el instalador primero." >&2; exit 1; }
+  printf %s "$KEY" | "$ROOT/resources/codex" login --with-api-key
+  exit $?
+fi
+if [ -x "$ROOT/cliproxyapi/cli-proxy-api" ] && ! is_listening 8317; then
+  "$PY" -I "$ROOT/modelhub/modelhub.py" init >/dev/null 2>&1
+  setsid "$ROOT/cliproxyapi/cli-proxy-api" -config "$ROOT/cliproxyapi/config.yaml" >>"$CODEX_HOME/cliproxyapi.log" 2>&1 < /dev/null &
+  echo $! > "$CODEX_HOME/cliproxyapi.pid"
+fi
+if ! is_listening 8318; then
+  setsid "$PY" -I "$ROOT/modelhub/modelhub.py" >/dev/null 2>&1 < /dev/null &
+fi
+if [ -n "$NODE" ] && [ -f "$ROOT/mastermcp/host.cjs" ] && ! is_listening 8319; then
+  # Master MCP arranca apagado: se activa desde Ajustes → Master MCP.
+  setsid "$NODE" "$ROOT/mastermcp/host.cjs" >/dev/null 2>&1 < /dev/null &
+fi
+# shellcheck disable=SC2086
+exec "$ROOT/ChatGPT" --user-data-dir="$HOME/.config/Codex-2" $CHATGPT2_FLAGS "$@"
