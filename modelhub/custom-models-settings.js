@@ -57,7 +57,7 @@ const S = {
 
 function mount(root) {
   if (!root) return;
-  let state = { providers: [], accounts: [], models: [], auto: [], autoLast: null };
+  let state = { providers: [], accounts: [], models: [], auto: [], autoLast: null, go: { configured: false, key_hint: "", models: [] } };
   let dirty = false;
   let msg = { text: "", err: false };
   const timers = new Set();
@@ -71,6 +71,7 @@ function mount(root) {
   const provBox = h("div", { style: { display: "flex", flexDirection: "column", gap: "12px" } });
   const imageBox = h("div", { style: { display: "flex", flexWrap: "wrap", gap: "6px" } });
   const modelsBox = h("div", { style: { display: "flex", flexWrap: "wrap", gap: "6px" } });
+  const goBox = h("div", { style: { ...S.card } });
   const autoBox = h("div", { style: { display: "flex", flexDirection: "column", gap: "6px" } });
   const autoLastEl = h("div", { style: S.muted });
   const autoSelect = h("select", { style: { ...S.btn, alignSelf: "flex-start" }, onChange: (e) => {
@@ -81,7 +82,7 @@ function mount(root) {
   async function refresh(keepEdits) {
     try {
       const s = await api("GET", "/state");
-      state.accounts = s.accounts; state.models = s.models; state.autoLast = s.auto_last || null;
+      state.accounts = s.accounts; state.models = s.models; state.autoLast = s.auto_last || null; state.go = s.opencode_go || state.go;
       if (!keepEdits) { state.providers = s.providers.map((p) => ({ ...p, orig_name: p.name })); state.auto = s.auto || []; }
       paint();
     } catch (e) {
@@ -107,7 +108,29 @@ function mount(root) {
     imageBox.replaceChildren(...(imgs.length ? imgs.map((m) => h("span", { style: { border: BORDER, borderRadius: "999px", padding: "2px 10px", fontSize: "12px" } }, m)) : [h("span", { style: S.muted }, "Ningún modelo de imagen disponible: conecta Antigravity arriba.")]));
     // proveedores
     provBox.replaceChildren(...state.providers.map(providerCard));
+    paintGo();
     paintAuto();
+  }
+
+  function paintGo() {
+    const key = h("input", { style: S.input, type: "password", placeholder: "Tu clave API de OpenCode Go", autocomplete: "off" });
+    const connect = async () => {
+      if (!key.value.trim()) return say("Pega primero tu clave API de OpenCode Go (la sacas en opencode.ai/console).", true);
+      try { await api("PUT", "/opencode-go", { api_key: key.value.trim() }); key.value = ""; await applyNow("OpenCode Go conectado."); } catch (e) { say("Error: " + e.message, true); }
+    };
+    const protoName = { chat: "chat", responses: "responses", anthropic: "anthropic", google: "google" };
+    const chips = state.go.models.map((m) => h("span", { title: protoName[m.proto] || m.proto, style: { border: BORDER, borderRadius: "999px", padding: "2px 10px", fontSize: "12px" } }, m.display));
+    goBox.replaceChildren(
+      state.go.configured
+        ? h("div", { style: { display: "flex", flexWrap: "wrap", gap: "10px", alignItems: "center", justifyContent: "space-between" } },
+            h("div", {}, h("b", {}, "OpenCode Go conectado"), "  ", h("span", { style: S.muted }, "clave " + state.go.key_hint + " · " + state.go.models.length + " modelos expuestos (prefijo go-)")),
+            h("div", { style: { display: "flex", gap: "8px" } },
+              h("button", { style: S.btn, onClick: () => applyNow("Lista de modelos actualizada.") }, "Actualizar modelos"),
+              h("button", { style: S.btn, onClick: async () => { if (!confirm("¿Quitar la clave de OpenCode Go?")) return; await api("DELETE", "/opencode-go"); await applyNow("OpenCode Go desconectado."); } }, "Quitar")))
+        : h("div", { style: { display: "flex", flexWrap: "wrap", gap: "10px", alignItems: "flex-end" } },
+            field("Clave API de OpenCode Go", key, "2 1 300px"), h("button", { style: S.primary, onClick: connect }, "Conectar OpenCode Go")),
+      h("div", { style: S.muted }, "Con tu suscripción Go (o Go Plus) se exponen todos sus modelos: GLM, Kimi, DeepSeek, Qwen, MiniMax, MiMo, GPT, Grok, Claude Haiku, Gemini… La lista se consulta a OpenCode al aplicar. Cada modelo usa el protocolo que le corresponde (chat, responses, Anthropic o Google) sin que tengas que configurar nada."),
+      ...(chips.length ? [h("div", { style: { display: "flex", flexWrap: "wrap", gap: "6px" } }, ...chips)] : []));
   }
 
   function paintAuto() {
@@ -210,6 +233,8 @@ function mount(root) {
       h("section", { style: { display: "flex", flexDirection: "column", gap: "10px" } },
         h("h2", { style: S.h2 }, "Cuentas conectadas"), accountsBox,
         h("div", { style: { display: "flex", flexWrap: "wrap", gap: "8px" } }, ...LOGINS.map(loginButton))),
+      h("section", { style: { display: "flex", flexDirection: "column", gap: "10px" } },
+        h("h2", { style: S.h2 }, "OpenCode Go"), goBox),
       h("section", { style: { display: "flex", flexDirection: "column", gap: "10px" } },
         h("h2", { style: S.h2 }, "Proveedores con API (URL base + clave)"), provBox, h("div", {}, tplSelect)),
       h("section", { style: { display: "flex", flexDirection: "column", gap: "10px" } },

@@ -19,6 +19,7 @@ Conecta Antigravity (Gemini), Claude, ChatGPT o cualquier API compatible con Ope
 4. [Instalación](#instalación)
 5. [Primer inicio (inicio de sesión)](#primer-inicio-inicio-de-sesión)
 6. [Tutorial: conectar tus modelos](#tutorial-conectar-tus-modelos)
+   - [OpenCode Go](#opencode-go-todos-sus-modelos-con-una-clave)
    - [Modo AUTO](#modo-auto-cambia-de-modelo-solo)
 7. [Modo «ChatGPT Web»](#modo-chatgpt-web)
 8. [Master MCP](#master-mcp)
@@ -60,14 +61,15 @@ Todo corre en tu máquina. Tu ChatGPT/Codex de siempre **no se toca**: la copia 
 | **`patch_ui.py`** | Extrae el `app.asar` original, le añade las pantallas y parches de abajo y lo vuelve a empaquetar. Parte siempre del original, así que se puede repetir sin acumular cambios. | `modelhub/patch_ui.py` |
 | **ModelHub** (`:8318`) | Servicio local. Guarda tus proveedores y cuentas, escribe la configuración del proxy, genera el catálogo de modelos de Codex y lanza los inicios de sesión OAuth. Exige un token y rechaza orígenes ajenos. | `modelhub/modelhub.py` |
 | **CLIProxyAPI** (`:8317`) | Proxy de código abierto ([router-for-me/CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI)). Habla con Antigravity, Claude y ChatGPT mediante OAuth y expone todo como una API compatible con OpenAI. | `cliproxyapi/cli-proxy-api` |
-| **Enrutador AUTO** (`:8320`) | Vive dentro de ModelHub. Cuando eliges modelos para AUTO, Codex habla con él en vez de con el proxy: reenvía todo tal cual y, si la petición es para `auto`, prueba tus modelos por orden y pasa al siguiente cuando uno falla. | `modelhub/modelhub.py` |
+| **Enrutador AUTO** (`:8323`) | Vive dentro de ModelHub. Cuando eliges modelos para AUTO, Codex habla con él en vez de con el proxy: reenvía todo tal cual y, si la petición es para `auto`, prueba tus modelos por orden y pasa al siguiente cuando uno falla. | `modelhub/modelhub.py` |
+| **OpenCode Go** | Con tu clave de la suscripción Go expone **todos** sus modelos (GLM, Kimi, DeepSeek, Qwen, MiniMax, MiMo, GPT, Grok, Claude Haiku, Gemini…), cada uno por el protocolo que le toca. | `modelhub/opencode_go.py` |
 | **Pantalla «Modelos personalizados»** | La interfaz de Ajustes para conectar cuentas, añadir proveedores y aplicar cambios. | `modelhub/custom-models-settings.js` |
 | **Pestaña «ChatGPT Web»** (`:8322`) | Una vista nativa de chatgpt.com dentro de la ventana, con sesión persistente propia, mismo color que la app y un menú de modos que se abre por encima de la web. **No automatiza ni lee la página.** | `modelhub/chatgpt_web_view.js` y `chatgpt_web_overlay.js` |
 | **Master MCP** (`:8319`) | Servidor MCP local con herramientas de carpetas y navegador, protegido con OAuth. Apagado por defecto. | `mastermcp/` |
 | **`gemini_media_mcp.py`** | Servidor MCP que da `generate_image` a cualquier modelo usando las cuentas de Antigravity. | `modelhub/gemini_media_mcp.py` |
 | **Lanzador `chatgpt2`** | Levanta lo que falte (proxy, hub, Master MCP) y abre la app con su propio perfil. | `bin/chatgpt2` |
 
-Los puertos (8317, 8318, 8319, 8320 y 8322) escuchan **solo en `127.0.0.1`**.
+Los puertos (8317, 8318, 8319, 8323 y 8322) escuchan **solo en `127.0.0.1`**.
 
 ---
 
@@ -191,6 +193,22 @@ Sirve para cualquier servicio compatible con la API de OpenAI (OpenRouter, un se
 
 En la misma pantalla: **Quitar** junto a la cuenta, o **Quitar proveedor** en el proveedor, y luego **Guardar y aplicar**.
 
+### OpenCode Go: todos sus modelos con una clave
+
+[OpenCode Go](https://opencode.ai/docs/go/) es una suscripción con una sola clave API que da acceso a muchos modelos. Aquí se conecta con un solo paso y **se exponen todos los que ofrezca en ese momento**.
+
+1. Suscríbete a Go (o Go Plus) en la [consola de OpenCode](https://opencode.ai/console) y copia tu clave API.
+2. Abre **Ajustes → Modelos personalizados → OpenCode Go**, pega la clave y pulsa **Conectar OpenCode Go**.
+3. Reinicia ChatGPT 2. Los modelos salen en el selector de Codex como *«Kimi K3 (OpenCode Go)»*, *«GLM-5.3 (OpenCode Go)»*, etc. (su identificador lleva el prefijo `go-`, para no chocar con otros proveedores).
+
+Cómo funciona por dentro:
+
+- La lista de modelos se pide a `opencode.ai/inference/go/v1/models` (es pública) cada vez que aplicas; el botón **Actualizar modelos** la vuelve a consultar. Si no hay conexión, se usa la lista que documenta OpenCode.
+- Cada modelo usa el protocolo que le corresponde y el proxy se encarga de traducirlo: chat (`/openai/v1/chat/completions`), Responses (`/openai/v1/responses`), Anthropic (`/anthropic/v1/messages`) o Google (`/google/v1beta/models/…`). Los modelos nuevos que OpenCode añada y que no estén en la documentación se tratan por familia (`gpt-`, `grok-`, `muse-` → Responses; `claude-`, `qwen` → Anthropic; `gemini-` → Google; el resto → chat).
+- La clave se guarda con permisos `0600` y la pantalla solo muestra los últimos 4 caracteres. Usa tus límites de Go: con *Extra usage* activado en la consola, Go pasa a tu saldo al agotar el límite.
+- Contexto e imágenes de cada modelo son aproximaciones por familia (OpenCode no publica esos datos en su lista).
+- Puedes meter estos modelos en **AUTO** (siguiente sección) para que, si uno agota su límite, siga con otro.
+
 ### Modo AUTO: cambia de modelo solo
 
 AUTO es un modelo más en el selector de Codex (aparece el primero de la lista). Tú eliges **qué modelos entran y en qué orden**; AUTO usa el primero y, **si falla o se queda sin cuota o límite, pasa solo al siguiente**.
@@ -298,14 +316,14 @@ El instalador lo comprueba con `ldd` y lista lo que falte. Instálalo con tu ges
 **«Los parches NO encajaron».**
 Estás usando una versión de la app distinta a la probada. Vuelve a ejecutar sin `--version`.
 
-**Un puerto está ocupado (8317, 8318, 8319, 8320 o 8322).**
+**Un puerto está ocupado (8317, 8318, 8319, 8323 o 8322).**
 Los puertos son fijos. Cierra lo que los use o la otra instancia de ChatGPT 2: `pkill -f 'user-data-dir=.*Codex-2'`.
 
 **El inicio de sesión de Antigravity/Claude no abre el navegador.**
 Mira el registro: `/tmp/modelhub-login-antigravity.log` (aparece la URL de inicio de sesión; ábrela a mano).
 
 **«invalid compaction capsule: unrecognized compaction capsule format».**
-Una conversación antigua trae un resumen (compactación) cifrado por otro proveedor o versión, y el proxy no sabe leerlo. El enrutador local lo detecta, descarta esa cápsula y reintenta la petición con un aviso de que se perdió ese resumen; no hace falta hacer nada. Si ves el error, comprueba que ChatGPT 2 se reinició tras actualizar (`base_url` del hub en `~/.codex-2/config.toml` debe ser `http://127.0.0.1:8320/v1`).
+Una conversación antigua trae un resumen (compactación) cifrado por otro proveedor o versión, y el proxy no sabe leerlo. El enrutador local lo detecta, descarta esa cápsula y reintenta la petición con un aviso de que se perdió ese resumen; no hace falta hacer nada. Si ves el error, comprueba que ChatGPT 2 se reinició tras actualizar (`base_url` del hub en `~/.codex-2/config.toml` debe ser `http://127.0.0.1:8323/v1`).
 
 **Los modelos no aparecen tras conectar la cuenta.**
 Pulsa *Guardar y aplicar* y luego *Reiniciar ChatGPT 2*. Registro del proxy: `~/.codex-2/cliproxyapi.log`.
@@ -337,13 +355,15 @@ chatgpt2-linux/
 ├── modelhub/
 │   ├── patch_ui.py         extrae app.asar.orig → parchea → reempaqueta
 │   ├── asar_tools.py       lector/empaquetador de .asar sin dependencias
-│   ├── modelhub.py         servicio local de modelos y cuentas (:8318)
+│   ├── modelhub.py         servicio local de modelos y cuentas (:8318) + enrutador (:8323)
+│   ├── opencode_go.py      OpenCode Go: lista de modelos, protocolos y bloques de configuración del proxy
 │   ├── custom-models-settings.js   pantalla «Modelos personalizados»
 │   ├── master-mcp-settings.js      pantalla «Master MCP»
 │   ├── chatgpt_web_view.js         proceso principal: vista de chatgpt.com (:8322)
 │   ├── chatgpt_web_overlay.js      interfaz: posición, cubierta y menú sobre la web
 │   ├── gemini_media_mcp.py         herramienta generate_image
-│   ├── tests/test_auto_router.py   pruebas del enrutador AUTO (proxy falso, sin cuentas)
+│   ├── tests/test_auto_router.py   pruebas del enrutador (proxy falso, sin cuentas)
+│   ├── tests/test_opencode_go.py   OpenCode Go de punta a punta con un servidor falso y CLIProxyAPI real
 │   └── restart-clone.sh            botón «Reiniciar» de Ajustes
 ├── mastermcp/              Master MCP (host.cjs compilado + fuentes TypeScript + pruebas)
 └── docs/img/               capturas

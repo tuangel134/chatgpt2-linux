@@ -20,6 +20,9 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # con «python -I» el directorio del script no está en sys.path
+import opencode_go as ocgo  # noqa: E402
+
 HOME = Path.home()
 ROOT = Path(os.environ.get("CHATGPT2_HOME") or HOME / ".local/opt/chatgpt2")
 CODEX_HOME = Path(os.environ.get("CODEX_HOME") or HOME / ".codex-2")
@@ -33,7 +36,7 @@ CATALOG = CODEX_HOME / "hub-models.json"
 CODEX_TOML = CODEX_HOME / "config.toml"
 PORT = 8318
 CPA_PORT = 8317
-ROUTER_PORT = 8320  # enrutador del modo AUTO (solo escucha en 127.0.0.1)
+ROUTER_PORT = 8323  # enrutador local (AUTO y saneado de cápsulas); solo escucha en 127.0.0.1
 CPA_PID = CODEX_HOME / "cliproxyapi.pid"
 LOGIN_FLAGS = {"codex": "-codex-login", "claude": "-claude-login", "antigravity": "-antigravity-login"}
 SUFFIX = {"antigravity": "Antigravity", "openai": "ChatGPT", "codex": "ChatGPT", "anthropic": "Claude", "claude": "Claude"}
@@ -78,6 +81,22 @@ def yq(v):
     return json.dumps(v, ensure_ascii=False)
 
 
+_go_cache = {"at": 0, "ents": []}
+
+
+def go_key(st):
+    return ((st.get("opencode_go") or {}).get("api_key") or "").strip()
+
+
+def go_entries(st, refresh=False):
+    """Modelos de OpenCode Go (lista pública), solo si hay clave. Se cachea 5 minutos."""
+    if not go_key(st):
+        return []
+    if refresh or time.time() - _go_cache["at"] > 300 or not _go_cache["ents"]:
+        _go_cache.update({"at": time.time(), "ents": ocgo.entries()})
+    return _go_cache["ents"]
+
+
 def write_cpa_config(st):
     lines = [
         "config-version: 8",
@@ -93,6 +112,10 @@ def write_cpa_config(st):
         '  auth-dir: "~/.cli-proxy-api"',
     ]
     provs = [p for p in st["providers"] if not p.get("disabled") and p.get("models")]
+    gents = go_entries(st)
+    gchat = ocgo.chat_provider(go_key(st), gents)
+    if gchat:
+        provs = provs + [gchat]
     if provs:
         lines.append("openai-compatibility:")
         for p in provs:
@@ -109,6 +132,7 @@ def write_cpa_config(st):
                     lines.append(f"        max-context-length: {int(m['context'])}")
                 mods = ["text", "image"] if m.get("image") else ["text"]
                 lines.append(f"        input-modalities: {json.dumps(mods)}")
+    lines += ocgo.cpa_groups(go_key(st), gents)  # modelos de OpenCode Go que no son de chat (responses / anthropic / google)
     tmp = CPA_CFG.with_suffix(".tmp")
     tmp.write_text("\n".join(lines) + "\n")
     tmp.chmod(0o600)
@@ -198,6 +222,8 @@ def build_catalog(st):
     for p in st["providers"]:
         for m in p.get("models", []):
             custom[m.get("alias") or m["name"]] = {**m, "provider": p["name"]}
+    for e in go_entries(st):
+        custom[e["alias"]] = {**e, "provider": ocgo.PROVIDER}
     out = []
     for i, m in enumerate(cpa_models()):
         mid = m["id"]
@@ -213,7 +239,7 @@ def build_catalog(st):
             label = pretty(mid)
             suffix = SUFFIX.get(owner, owner.capitalize() or None)
         name = f"{label} ({suffix})" if suffix and suffix.lower() not in label.lower() else label
-        levels = LEVELS_BASE + ([{"effort": "xhigh", "description": "Razonamiento máximo"}] if mid.startswith("gpt-") else [])
+        levels = LEVELS_BASE + ([{"effort": "xhigh", "description": "Razonamiento máximo"}] if (mid.startswith("gpt-") or (c and c.get("gpt"))) else [])
         out.append({
             "slug": mid, "display_name": name, "description": "Modelo servido por el hub local (CLIProxyAPI)",
             "default_reasoning_level": "medium", "supported_reasoning_levels": levels, "shell_type": "shell_command",
@@ -317,6 +343,7 @@ def ensure_mcp():
 
 def apply_all(restart_cpa=True):
     st = load_state()
+    go_entries(st, refresh=True)
     write_cpa_config(st)
     if restart_cpa:
         restart_proxy()
@@ -545,6 +572,13 @@ def start_router():
         print("enrutador AUTO no iniciado:", e, file=sys.stderr)
 
 
+def go_status(st):
+    k = go_key(st)
+    ents = go_entries(st) if k else []
+    return {"configured": bool(k), "key_hint": ("…" + k[-4:]) if len(k) > 8 else "",
+            "models": [{"name": e["name"], "alias": e["alias"], "display": e["display"], "proto": e["proto"]} for e in ents]}
+
+
 def mask(p):
     q = dict(p)
     k = q.pop("api_key", "") or ""
@@ -605,7 +639,8 @@ class H(BaseHTTPRequestHandler):
                 except Exception:
                     models = []
                 self._send(200, {"providers": [mask(p) for p in st["providers"]], "accounts": accounts(), "models": models,
-                                 "auto": (st.get("auto") or {}).get("models", []), "auto_last": auto_last})
+                                 "auto": (st.get("auto") or {}).get("models", []), "auto_last": auto_last,
+                                 "opencode_go": go_status(st)})
             elif self.path.startswith("/login/"):
                 self._send(200, login_status(self.path.split("/")[2]))
             else:
@@ -636,6 +671,14 @@ class H(BaseHTTPRequestHandler):
                                            "context": int(m.get("context") or 0) or None, "image": bool(m.get("image"))})
                     clean.append({"name": name, "base_url": base, "api_key": key, "models": models, "disabled": bool(p.get("disabled"))})
                 save_state({**load_state(), "providers": clean})
+                self._send(200, {"ok": True})
+            elif self.path == "/opencode-go":
+                key = str(self._body().get("api_key", "")).strip()
+                if not key:
+                    raise ValueError("falta la clave API de OpenCode Go")
+                if len(key) > 300 or any(c.isspace() for c in key):
+                    raise ValueError("la clave no parece válida")
+                save_state({**load_state(), "opencode_go": {"api_key": key}})
                 self._send(200, {"ok": True})
             elif self.path == "/auto":
                 models = [str(m) for m in self._body().get("models", []) if str(m).strip() and str(m) != "auto"]
@@ -673,7 +716,13 @@ class H(BaseHTTPRequestHandler):
         if not self._guard():
             return
         try:
-            if self.path.startswith("/account/"):
+            if self.path == "/opencode-go":
+                st = load_state()
+                st.pop("opencode_go", None)
+                save_state(st)
+                _go_cache.update({"at": 0, "ents": []})
+                self._send(200, {"ok": True})
+            elif self.path.startswith("/account/"):
                 f = AUTH_DIR / os.path.basename(self.path[len("/account/"):])
                 if f.suffix == ".json" and f.exists():
                     f.unlink()
