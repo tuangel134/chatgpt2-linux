@@ -110,7 +110,7 @@ async function poll() {
       if (!env || typeof env.id !== "string") continue;
       lastCommandAt = Date.now();
       let out;
-      try { out = await handleCommand(decrypt(env.body)); } catch (e) { out = { ok: false, error: e instanceof Error ? e.message : "La operación remota falló." }; log("cmd error:", out.error); }
+      try { out = await handleCommand(decrypt(env.body)); } catch (e) { out = { ok: false, error: e instanceof Error ? e.message : "La operación remota falló.", ...(e && e.code === "busy" ? { code: "busy" } : {}) }; log("cmd error:", out.error); }
       await respond(env.id, out);
     }
   } catch (e) { log("poll:", e.message); } finally { polling = false; }
@@ -271,7 +271,7 @@ async function messages(workspaceId, sessionId, limit) {
     else if (item.type === "agentMessage" && item.text) out.push({ role: "assistant", ...part(item.text) });
     else { const a = activityOf(item); if (a) out.push({ role: "tool", kind: a.kind, status: a.status, exitCode: item.exitCode, ...part(a.text) }); }
   }
-  return out;
+  return out.slice(-400);  // hilos muy largos (p. ej. automatizaciones): solo lo más reciente
 }
 
 async function models() {
@@ -288,13 +288,20 @@ async function ensureLoaded(threadId) {
   loaded.add(threadId);
 }
 
-async function start(workspaceId, sessionId, text, model, effort, attachments) {
+async function start(workspaceId, sessionId, text, model, effort, attachments, fork) {
   model = (typeof model === "string" && model.trim()) || settings.model || "";
   const root = await rootOf(workspaceId);
   let threadId = sessionId;
   if (threadId) {
     if ([...jobs.values()].some((j) => j.threadId === threadId && j.status === "running")) throw new Error("Ya hay una tarea en curso en esta conversación. Espera o cancélala.");
-    await ensureLoaded(threadId);
+    try { await ensureLoaded(threadId); }
+    catch (e) {
+      if (!/active writer/i.test(String(e.message))) throw e;
+      // La app de escritorio tiene esta conversación abierta/en uso (p. ej. una automatización) y solo puede escribir un proceso a la vez.
+      if (!fork) { const err = new Error("Esa conversación la tiene en uso la app de ChatGPT 2 en la PC (por ejemplo una automatización). Puedes continuar en una copia: tendrá todo el historial y no toca la original."); err.code = "busy"; throw err; }
+      const f = await codex.call("thread/fork", { threadId, excludeTurns: true, approvalPolicy: "never", sandbox: settings.permission });
+      threadId = f.thread.id; loaded.add(threadId);
+    }
   } else {
     const t = await codex.call("thread/start", { cwd: root, approvalPolicy: "never", sandbox: settings.permission, ...(model ? { model } : {}) });
     threadId = t.thread.id; loaded.add(threadId);
@@ -432,7 +439,7 @@ async function handleCommand(c) {
     case "send": {
       const text = str("text").trim() || (Array.isArray(c.attachments) && c.attachments.length ? "Mira los archivos adjuntos." : "");
       if (!str("workspaceId") || !text) throw new Error("Faltan workspaceId y texto.");
-      return { ok: true, ...(await start(str("workspaceId"), str("sessionId") || undefined, text, c.model, c.effort, c.attachments)) };
+      return { ok: true, ...(await start(str("workspaceId"), str("sessionId") || undefined, text, c.model, c.effort, c.attachments, c.fork === true)) };
     }
     case "models": return { ok: true, ...(await models()) };
     case "automations": return { ok: true, automations: automations(), now: Date.now() };

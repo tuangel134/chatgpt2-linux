@@ -52,6 +52,7 @@ button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:poin
 .dots{display:inline-flex;gap:4px;padding:6px 0}.dots i{width:7px;height:7px;border-radius:50%;background:var(--muted);animation:b 1.1s infinite ease-in-out}.dots i:nth-child(2){animation-delay:.15s}.dots i:nth-child(3){animation-delay:.3s}
 @keyframes b{0%,80%,100%{opacity:.25}40%{opacity:1}}
 .err-line{color:#fca5a5;margin:8px 0}
+.hb{margin:6px 0 2px}.hb .pill{display:inline-block}
 /* compositor */
 #comp{flex:0 0 auto;padding:6px 10px calc(8px + env(safe-area-inset-bottom))}
 #box{background:var(--surface);border-radius:26px;padding:8px 8px 8px 16px;display:flex;align-items:flex-end;gap:8px}
@@ -191,7 +192,7 @@ function setConn(state) { $("#conn").className = state; }
 
 // ---------------------------------------------------------------- markdown seguro (todo se escapa antes de dar formato)
 function md(src) {
-  const blocks = []; let t = String(src).replace(/\r/g, "");
+  const blocks = []; let t = String(src).replace(/\r/g, "").replace(/&amp;/g, "&");
   t = t.replace(/```([\w+#.-]*)\n([\s\S]*?)```/g, (_, lang, code) => { blocks.push({ lang, code: code.replace(/\n$/, "") }); return `\u0000${blocks.length - 1}\u0000`; });
   const inline = (s) => esc(s)
     .replace(/`([^`\n]+)`/g, "<code>$1</code>")
@@ -222,6 +223,15 @@ function md(src) {
 document.addEventListener("click", (e) => { const b = e.target.closest("[data-copy]"); if (!b) return; const code = b.closest("pre").querySelector("code").textContent; (navigator.clipboard ? navigator.clipboard.writeText(code) : Promise.reject()).then(() => (b.textContent = "Copiado"), () => { const r = document.createRange(); r.selectNodeContents(b.closest("pre").querySelector("code")); getSelection().removeAllRanges(); getSelection().addRange(r); b.textContent = "Selecciona y copia"; }); setTimeout(() => (b.textContent = "Copiar"), 1800); });
 
 // ---------------------------------------------------------------- pintado del chat
+const DECISION = { DONT_NOTIFY: "sin aviso", NOTIFY: "con aviso" };
+function assistantHtml(text) {
+  const m = /<heartbeat>([\s\S]*?)<\/heartbeat>/.exec(text);
+  if (!m) return md(text) + bareImages(text);
+  const tag = (n) => { const x = new RegExp("<" + n + ">([\\s\\S]*?)</" + n + ">").exec(m[1]); return x ? x[1].trim() : ""; };
+  const id = tag("automation_id"), dec = tag("decision"), msg = tag("message");
+  const rest = text.replace(m[0], "").trim();
+  return `<div class="hb"><span class="pill">⏱ Automatización${id ? " · " + esc(id) : ""}${dec ? " · " + esc(DECISION[dec] || dec) : ""}</span></div>${md(msg || m[1])}${rest ? md(rest) : ""}${bareImages(msg + " " + rest)}`;
+}
 const ICON = { command: "›_", file: "✎", web: "🌐", tool: "⚙" };
 function toolsHtml(items) {
   const bad = items.filter((x) => x.status === "failed" || (typeof x.exitCode === "number" && x.exitCode !== 0)).length;
@@ -279,8 +289,9 @@ function renderMsgs(stick) {
     if (m.role === "tool" && m.kind === "image" && m.files) { flush(); h += `<div class="a">${filesHtml(m.files)}</div>`; continue; }
     if (m.role === "tool") { group.push({ kind: m.kind, text, status: m.status, exitCode: m.exitCode }); continue; }
     flush();
-    if (m.role === "user") { const long = text.length > 420; h += `<div class="u"><div class="uwrap">${m.files && m.files.length ? `<div class="files">${filesHtml(m.files)}</div>` : ""}${text || !(m.files && m.files.length) ? `<div class="ub${long ? " clip" : ""}">${esc(long ? text.slice(0, 420) + "…" : text)}</div>` : ""}</div></div>`; }
-    else h += `<div class="a">${md(text)}${bareImages(text)}</div>`;
+    if (m.role === "user" && /^\s*<heartbeat>|<automation_id>|^\s*<instructions>/.test(text.slice(0, 600))) { const id = (/<automation_id>([^<]+)<\/automation_id>/.exec(text) || [])[1]; h += `<details class="tools"><summary>⏱ Se ejecutó la automatización${id ? " · " + esc(id) : ""}</summary><div class="t"><span>${esc(text.slice(0, 2500))}${text.length > 2500 ? "…" : ""}</span></div></details>`; }
+    else if (m.role === "user") { const long = text.length > 420; h += `<div class="u"><div class="uwrap">${m.files && m.files.length ? `<div class="files">${filesHtml(m.files)}</div>` : ""}${text || !(m.files && m.files.length) ? `<div class="ub${long ? " clip" : ""}">${esc(long ? text.slice(0, 420) + "…" : text)}</div>` : ""}</div></div>`; }
+    else h += `<div class="a">${assistantHtml(text)}</div>`;
   }
   flush();
   if (S.job && S.job.running) {
@@ -288,7 +299,7 @@ function renderMsgs(stick) {
     if (j.activity && j.activity.length) h += `<div class="live">${j.activity.map((a) => `<div class="t">${ICON[a.kind] || "•"} ${esc(a.text)}</div>`).join("")}</div>`;
     h += j.partial ? `<div class="a">${md(j.partial)}</div>` : `<div class="dots"><i></i><i></i><i></i></div>`;
   }
-  if (S.err) h += `<div class="err-line">${esc(S.err)}</div>`;
+  if (S.err) h += `<div class="err-line">${esc(S.err)}</div>` + (S.busyRetry ? '<button class="filebtn" data-fork="1">Continuar en una copia</button>' : "");
   if (!h) {
     const w = curWs();
     h = `<div class="empty"><div class="logo">2</div><h2>¿Qué quieres hacer?</h2><span>${w ? "Proyecto: <b>" + esc(w.name) + "</b>" : "Abre el menú y elige un proyecto"}</span></div>`;
@@ -441,10 +452,18 @@ async function send() {
     const attachments = [];
     for (const f of files) { f.state = "subiendo"; paintChips(); try { attachments.push({ id: await uploadOne(f) }); } catch (e) { f.state = "error"; paintChips(); throw new Error("No se pudo subir " + f.name + ": " + e.message); } }
     pendingFiles.length = 0; paintChips();
-    const r = await call({ type: "send", workspaceId: S.wsId, sessionId: S.sid || undefined, text, ...(attachments.length ? { attachments } : {}), ...(S.model ? { model: S.model } : {}), ...(S.effort ? { effort: S.effort } : {}) }, 60000);
+    const cmd = { type: "send", workspaceId: S.wsId, sessionId: S.sid || undefined, text, ...(attachments.length ? { attachments } : {}), ...(S.model ? { model: S.model } : {}), ...(S.effort ? { effort: S.effort } : {}) };
+    S.lastCmd = cmd; S.busyRetry = null;
+    const r = await call(cmd, 60000);
     S.sid = r.sessionId; store.set("sid", S.sid); S.job.id = r.jobId; paintTop(); follow(r.jobId, S.sid);
-  } catch (e) { S.job = null; S.err = e.message; renderMsgs(true); paintSend(); }
+  } catch (e) { S.job = null; S.err = e.message; if (/continuar en una copia/i.test(e.message) && S.lastCmd) S.busyRetry = S.lastCmd; renderMsgs(true); paintSend(); }
 }
+async function forkAndSend() {
+  const cmd = S.busyRetry; if (!cmd) return; S.busyRetry = null; S.err = ""; S.job = { running: true, partial: "", activity: [] }; renderMsgs(true); paintSend();
+  try { const r = await call({ ...cmd, fork: true }, 60000); S.sid = r.sessionId; store.set("sid", S.sid); S.job.id = r.jobId; paintTop(); refreshStatus(); follow(r.jobId, S.sid); }
+  catch (e) { S.job = null; S.err = e.message; renderMsgs(true); paintSend(); }
+}
+document.addEventListener("click", (e) => { if (e.target.closest("[data-fork]")) forkAndSend(); });
 async function follow(jobId, sid) {
   let misses = 0;
   while (S.job && S.job.running && S.job.id === jobId) {

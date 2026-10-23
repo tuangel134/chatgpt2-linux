@@ -71,8 +71,8 @@ test("estado: carpetas y conversaciones de Codex (sin subagentes)", async () => 
   assert.deepEqual(names, ["bot", "web"]);
   const web = r.workspaces.find((w) => w.name === "web");
   assert.equal(web.root, "/work/web");
-  assert.deepEqual(web.sessions.map((s) => s.id), ["t-alpha"]);          // t-sub es de un subagente
-  assert.equal(web.sessions[0].title, "Arreglar la página");
+  assert.deepEqual(web.sessions.map((s) => s.id), ["t-busy", "t-alpha"]);          // t-sub es de un subagente
+  assert.equal(web.sessions.find((x) => x.id === "t-alpha").title, "Arreglar la página");
   const bot = r.workspaces.find((w) => w.name === "bot");
   assert.ok(bot.sessions[0].title.length <= 70);
 });
@@ -202,6 +202,16 @@ test("leer archivos: por trozos dentro de zonas permitidas; fuera de ellas, no",
   const link = path.join(TMP, "codex-home", "remote", "uploads", "doc00001", "escape.txt");
   fs.symlinkSync("/etc/hostname", link);
   assert.equal((await phone.ask({ type: "file", path: link })).ok, false);                                       // un enlace simbólico no saca de la zona
+});
+
+test("conversación en uso por la app de escritorio: aviso claro y opción de continuar en una copia", async () => {
+  const ws = (await phone.ask({ type: "status" })).workspaces.find((w) => w.name === "web");
+  const r = await phone.ask({ type: "send", workspaceId: ws.id, sessionId: "t-busy", text: "hola" });
+  assert.equal(r.ok, false); assert.equal(r.code, "busy"); assert.match(r.error, /continuar en una copia/);
+  const f = await phone.ask({ type: "send", workspaceId: ws.id, sessionId: "t-busy", text: "sigue", fork: true });
+  assert.equal(f.ok, true); assert.match(f.sessionId, /^t-fork-/);                                           // sigue en otro hilo
+  let st; for (let i = 0; i < 40; i++) { st = (await phone.ask({ type: "job", jobId: f.jobId })).status; if (st.status !== "running") break; await new Promise((x) => setTimeout(x, 50)); }
+  assert.equal(st.status, "done"); assert.equal(st.sessionId, f.sessionId);
 });
 
 test("dispositivos: se listan y se pueden revocar", async () => {

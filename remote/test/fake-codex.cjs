@@ -7,6 +7,7 @@ const now = () => Math.floor(Date.now() / 1000);
 const threads = [
   { id: "t-alpha", name: "Arreglar la página", preview: "Arreglar la página", cwd: "/work/web", updatedAt: now() - 10, status: { type: "idle" }, ephemeral: false, turns: [] },
   { id: "t-beta", name: null, preview: "Revisar el bot de polymarket con un texto muy largo ".repeat(4), cwd: "/work/bot", updatedAt: now() - 100, status: { type: "notLoaded" }, ephemeral: false, turns: [] },
+  { id: "t-busy", name: "Automatización en uso", preview: "x", cwd: "/work/web", updatedAt: now() - 5, status: { type: "idle" }, ephemeral: false, turns: [] },
   { id: "t-sub", name: "subagente", preview: "x", cwd: "/work/web", updatedAt: now(), status: { type: "idle" }, ephemeral: false, parentThreadId: "t-alpha", turns: [] },
 ];
 const turns = { "t-alpha": [{ id: "u1", status: "completed", items: [
@@ -28,7 +29,10 @@ readline.createInterface({ input: process.stdin }).on("line", (l) => {
       { id: "m-hidden", model: "m-hidden", displayName: "Oculto", hidden: true, supportedReasoningEfforts: [] }] });
     case "thread/list": return ok({ data: threads, nextCursor: null });
     case "thread/turns/list": return ok({ data: (turns[p.threadId] || []).slice().reverse(), nextCursor: null });
-    case "thread/resume": return ok({ thread: threads.find((t) => t.id === p.threadId) });
+    case "thread/resume":
+      if (p.threadId === "t-busy") return out({ jsonrpc: "2.0", id: m.id, error: { code: -32600, message: "thread t-busy already has an active writer" } });
+      return ok({ thread: threads.find((t) => t.id === p.threadId) });
+    case "thread/fork": { const t = { id: "t-fork-" + ++n, name: null, preview: "", cwd: "/work/web", updatedAt: now(), status: { type: "idle" }, ephemeral: false, turns: [] }; threads.push(t); return ok({ thread: t }); }
     case "thread/start": { const t = { id: "t-new-" + ++n, name: null, preview: "", cwd: p.cwd, updatedAt: now(), status: { type: "idle" }, ephemeral: false, turns: [] }; threads.push(t); global.lastStart = p; return ok({ thread: t }); }
     case "turn/start": {
       const id = "turn-" + ++n; ok({ turn: { id, status: "inProgress", items: [] } });
