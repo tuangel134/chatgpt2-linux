@@ -35,9 +35,9 @@ class Follower {
     this.timer = setInterval(() => this._sweep(), 15_000); this.timer.unref?.();
   }
 
-  async owns(threadId) {
+  async owns(threadId, fresh) {
     const c = this.owned.get(threadId);
-    if (c && Date.now() - c.at < 5000) return c.ok;
+    if (!fresh && c && Date.now() - c.at < 5000) return c.ok;
     const ok = await this.ipc.ownsThread(threadId);
     this.owned.set(threadId, { at: Date.now(), ok });
     return ok;

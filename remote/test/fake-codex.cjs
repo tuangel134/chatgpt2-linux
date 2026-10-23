@@ -30,7 +30,7 @@ readline.createInterface({ input: process.stdin }).on("line", (l) => {
     case "thread/list": return ok({ data: threads, nextCursor: null });
     case "thread/turns/list": return ok({ data: (turns[p.threadId] || []).slice().reverse(), nextCursor: null });
     case "thread/resume":
-      if (p.threadId === "t-busy") return out({ jsonrpc: "2.0", id: m.id, error: { code: -32600, message: "thread t-busy already has an active writer" } });
+      if (p.threadId === "t-busy" || p.threadId === "t-lock") return out({ jsonrpc: "2.0", id: m.id, error: { code: -32600, message: "thread t-busy already has an active writer" } });
       return ok({ thread: threads.find((t) => t.id === p.threadId) });
     case "thread/fork": { const t = { id: "t-fork-" + ++n, name: null, preview: "", cwd: "/work/web", updatedAt: now(), status: { type: "idle" }, ephemeral: false, turns: [] }; threads.push(t); return ok({ thread: t }); }
     case "thread/start": { const t = { id: "t-new-" + ++n, name: null, preview: "", cwd: p.cwd, updatedAt: now(), status: { type: "idle" }, ephemeral: false, turns: [] }; threads.push(t); global.lastStart = p; return ok({ thread: t }); }

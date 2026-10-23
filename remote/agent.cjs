@@ -331,6 +331,18 @@ function onFollowChange(threadId, state) {
     else j.status = "done";
   }
 }
+// Pide a la app de la PC que abra la conversación (enlace profundo codex://threads/ID a la instancia ya abierta): al abrirla pasa a ser su dueña
+// y entonces se le pueden mandar órdenes por el IPC. Solo si la app está corriendo; nunca arranca una app nueva.
+async function openInDesktop(threadId) {
+  try { await ipc.connect(); } catch { return false; }
+  if (await follower.owns(threadId, true)) return true;
+  const bin = process.env.CHATGPT2_APP_BIN || path.join(ROOT, "ChatGPT");
+  if (!fs.existsSync(bin)) return false;
+  const c = cp.spawn(bin, [`--user-data-dir=${process.env.CHATGPT2_USER_DATA || path.join(HOME, ".config", "Codex-2")}`, `codex://threads/${threadId}`], { detached: true, stdio: "ignore", env: { ...process.env, CODEX_HOME } });
+  c.on("error", () => {}); c.unref();
+  for (let i = 0; i < 25; i++) { await new Promise((r) => setTimeout(r, 400)); if (await follower.owns(threadId, true)) return true; }
+  return false;
+}
 async function lastTurns(threadId, n) {
   const r = await codex.call("thread/turns/list", { threadId, limit: n || 2, sortDirection: "desc", itemsView: "full" });
   return r.data || [];
@@ -354,7 +366,7 @@ function watchOwnerJob(jobId) {
     if (j.status !== "running") return clearInterval(timer);
     if (Date.now() - j.at > 6 * 3600_000) { j.status = "error"; j.error = "La tarea tardó demasiado."; return clearInterval(timer); }
     if (j.kind === "compact" && Date.now() - j.at > 120_000) { j.status = "done"; j.text = "Contexto compactado."; return clearInterval(timer); }
-    if (j.kind === "compact") return;
+    if (j.kind === "compact") { const st = follower.get(j.threadId); if (st && !isActive(st) && Date.now() - j.at > 6000) { j.status = "done"; j.text = "Contexto compactado."; clearInterval(timer); } return; }
     try {
       const turn = (await lastTurns(j.threadId, 3)).find((t) => t.id === j.turnId);
       if (!turn) { if (++misses > 30) { j.status = "error"; j.error = "No encuentro el turno en el historial."; clearInterval(timer); } return; }
@@ -398,18 +410,23 @@ async function start(workspaceId, sessionId, text, model, effort, attachments, f
   if (threadId) {
     if ([...jobs.values()].some((j) => j.threadId === threadId && j.status === "running")) throw new Error("Ya hay una tarea en curso en esta conversación. Espera o cancélala.");
     // Si la app de la PC tiene la conversación, la orden se la damos a ella (misma conversación, sin copias): ambos lados ven lo mismo al instante.
-    if (await follower.owns(threadId)) {
+    let viaDesktop = await follower.owns(threadId);
+    if (!viaDesktop) {
+      try { await ensureLoaded(threadId); }
+      catch (e) {
+        if (!/active writer/i.test(String(e.message))) throw e;
+        // La app de la PC tiene la conversación cargada (p. ej. una automatización) pero ninguna ventana la sigue: se le pide que la abra.
+        viaDesktop = await openInDesktop(threadId);
+        if (!viaDesktop) { const err = new Error("La app de la PC tiene bloqueada esta conversación y no se pudo abrir sola. Ábrela en la PC e inténtalo de nuevo."); err.code = "busy"; throw err; }
+      }
+    }
+    if (viaDesktop) {
       await follower.ensure(threadId, 3000);
       if (await runningTurn(threadId)) throw new Error("La conversación está respondiendo en la PC. Espera a que termine o detenla.");
       const r = await ipc.call("thread-follower-start-turn", { conversationId: threadId, turnStart: { request: { threadId, input, ...(model ? { model } : {}), ...(eff ? { effort: eff } : {}) }, context: {} } }, { timeoutMs: 30000 });
       const jobId = newJob({ threadId, turnId: r.result.turn.id, sessionId: threadId, owner: true });
       watchOwnerJob(jobId);
       return { jobId, sessionId: threadId };
-    }
-    try { await ensureLoaded(threadId); }
-    catch (e) {
-      if (!/active writer/i.test(String(e.message))) throw e;
-      const err = new Error("Otra app tiene bloqueada esta conversación y no se puede escribir ahora. Intenta de nuevo en un momento."); err.code = "busy"; throw err;
     }
   } else {
     const t = await codex.call("thread/start", { cwd: root, approvalPolicy: "never", sandbox: settings.permission, ...(ephemeral ? { ephemeral: true } : {}), ...(model ? { model } : {}) });
@@ -535,10 +552,13 @@ async function slash(c) {
   switch (c.cmd) {
     case "compact": {
       const threadId = sid(c);
-      if (await follower.owns(threadId)) {
+      let viaDesktop = await follower.owns(threadId);
+      if (!viaDesktop) { try { await ensureLoaded(threadId); } catch (e) { if (/active writer/i.test(String(e.message))) viaDesktop = await openInDesktop(threadId); else throw e; } }
+      if (viaDesktop) {
         await follower.ensure(threadId, 3000);
-        await ipc.call("thread-follower-compact-thread", { conversationId: threadId });
-        const jobId = newJob({ kind: "compact", threadId, turnId: "", sessionId: threadId, owner: true }); watchOwnerJob(jobId);
+        const jobId = newJob({ kind: "compact", threadId, turnId: "", sessionId: threadId, owner: true });   // antes de la orden: así no se pierde el primer cambio de estado
+        try { await ipc.call("thread-follower-compact-thread", { conversationId: threadId }); } catch (e) { jobs.delete(jobId); throw e; }
+        watchOwnerJob(jobId);
         return { jobId, sessionId: threadId };
       }
       await needWriter(threadId); await codex.call("thread/compact/start", { threadId });

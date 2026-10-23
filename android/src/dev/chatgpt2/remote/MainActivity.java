@@ -5,6 +5,8 @@ import android.app.AlertDialog;
 import android.app.Dialog;
 import android.app.KeyguardManager;
 import android.content.Context;
+import android.content.BroadcastReceiver;
+import android.content.IntentFilter;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.ContentValues;
@@ -21,6 +23,7 @@ import android.graphics.Typeface;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.text.InputType;
 import android.util.Base64;
 import android.view.Gravity;
@@ -90,7 +93,21 @@ public final class MainActivity extends Activity {
     private final ExecutorService calls = Executors.newFixedThreadPool(4);
     private ValueCallback<Uri[]> fileCallback; private static final int PICK_FILES = 55;
     private boolean anywhere;
-	private boolean appUnlocked, unlockInFlight, refreshInFlight, sendInFlight, captureInFlight;
+	private boolean appUnlocked, unlockInFlight, unlockRetrySuppressed, activityResumed, refreshInFlight, sendInFlight, captureInFlight;
+	private long lastLeftAt;
+	private int unlockWaitAttempts;
+	private static final long UNLOCK_GRACE_MS = 30000L;
+	private static final int MAX_UNLOCK_WAIT_ATTEMPTS = 20;
+	private final Runnable unlockWhenReady = new Runnable() { @Override public void run() { requestDeviceUnlock(); } };
+	private final BroadcastReceiver screenOffReceiver = new BroadcastReceiver() {
+		@Override public void onReceive(Context context, Intent intent) {
+			if (Intent.ACTION_SCREEN_OFF.equals(intent.getAction()) && connected()) {
+				appUnlocked = false; unlockRetrySuppressed = false; unlockWaitAttempts = 0;
+				main.removeCallbacks(unlockWhenReady);
+				showPairing();
+			}
+		}
+	};
     private Dialog remoteBrowserDialog;
     private Spinner remotePagePicker;
     private ImageView remotePageImage;
@@ -115,7 +132,8 @@ public final class MainActivity extends Activity {
 		relayInstallation = getPreferences(MODE_PRIVATE).getString("relayInstallation", ""); relayKey = loadSecret("relayKey");
 		relayEncryptionKey = loadSecret("relayEncryptionKey"); relayDeviceToken = loadSecret("relayDeviceToken");
         build();
-        if (connected()) { requestDeviceUnlock(); }
+		registerReceiver(screenOffReceiver, new IntentFilter(Intent.ACTION_SCREEN_OFF));
+        if (connected()) { showPairing(); }
         else {
             showPairing();
             // Diagnóstico: distinguir «el sistema borró la llave de seguridad» de «la app llegó sin datos» (instalación limpia o desinstalada antes).
@@ -126,9 +144,22 @@ public final class MainActivity extends Activity {
         main.postDelayed(refreshLoop, 3500);
     }
 
-    @Override protected void onDestroy() { main.removeCallbacks(refreshLoop); io.shutdownNow(); calls.shutdownNow(); if (web != null) web.destroy(); super.onDestroy(); }
-	@Override protected void onPause() { if (connected()) appUnlocked = false; super.onPause(); }
-	@Override protected void onResume() { super.onResume(); if (connected() && !appUnlocked && !unlockInFlight) requestDeviceUnlock(); }
+    @Override protected void onDestroy() { main.removeCallbacks(refreshLoop); main.removeCallbacks(unlockWhenReady); unlockInFlight = false; unregisterReceiver(screenOffReceiver); io.shutdownNow(); calls.shutdownNow(); if (web != null) web.destroy(); super.onDestroy(); }
+	@Override protected void onStart() {
+		super.onStart();
+		if (connected() && lastLeftAt > 0 && SystemClock.elapsedRealtime() - lastLeftAt > UNLOCK_GRACE_MS) {
+			appUnlocked = false;
+			unlockRetrySuppressed = false;
+			showPairing();
+		}
+	}
+	@Override protected void onResume() { super.onResume(); activityResumed = true; unlockWaitAttempts = 0; requestDeviceUnlock(); }
+	@Override protected void onPause() { activityResumed = false; main.removeCallbacks(unlockWhenReady); super.onPause(); }
+	@Override protected void onStop() { lastLeftAt = SystemClock.elapsedRealtime(); super.onStop(); }
+	@Override public void onWindowFocusChanged(boolean hasFocus) {
+		super.onWindowFocusChanged(hasFocus);
+		if (hasFocus) { unlockWaitAttempts = 0; requestDeviceUnlock(); }
+	}
 
     private void build() {
         LinearLayout root = new LinearLayout(this); root.setOrientation(LinearLayout.VERTICAL); root.setBackgroundColor(BG);
@@ -260,12 +291,23 @@ public final class MainActivity extends Activity {
     }
     private void setProjectTitle() { projectName.setText((workspaceName.isEmpty() ? "CHATGPT 2 REMOTE" : workspaceName.toUpperCase()) + "  ▾"); }
 	private void requestDeviceUnlock() {
-		if (!connected() || appUnlocked || unlockInFlight) return;
+		if (!activityResumed || !connected() || appUnlocked || unlockInFlight || unlockRetrySuppressed) return;
 		KeyguardManager keyguard = (KeyguardManager) getSystemService(Context.KEYGUARD_SERVICE);
-		if (keyguard == null || !keyguard.isKeyguardSecure()) { showPairing(); setStatus("Configura un bloqueo de pantalla para proteger ChatGPT 2 Remote."); return; }
+		if (keyguard == null || !keyguard.isKeyguardSecure()) { showPairing(); setStatus("Configura un bloqueo de pantalla para proteger ChatGPT 2 Remote."); unlockRetrySuppressed = true; return; }
+		if (keyguard.isKeyguardLocked() || !getWindow().getDecorView().hasWindowFocus()) {
+			if (unlockWaitAttempts++ < MAX_UNLOCK_WAIT_ATTEMPTS) {
+				main.removeCallbacks(unlockWhenReady);
+				main.postDelayed(unlockWhenReady, 500);
+			}
+			return;
+		}
+		main.removeCallbacks(unlockWhenReady);
+		unlockWaitAttempts = 0;
 		Intent intent = keyguard.createConfirmDeviceCredentialIntent("Desbloquear ChatGPT 2 Remote", "Confirma el bloqueo del dispositivo para abrir el chat.");
-		if (intent == null) { showPairing(); setStatus("No se pudo solicitar el desbloqueo del dispositivo."); return; }
-		unlockInFlight = true; startActivityForResult(intent, UNLOCK_CHAT);
+		if (intent == null) { showPairing(); setStatus("No se pudo solicitar el desbloqueo del dispositivo."); unlockRetrySuppressed = true; return; }
+		unlockInFlight = true;
+		try { startActivityForResult(intent, UNLOCK_CHAT); }
+		catch (Exception error) { unlockInFlight = false; unlockRetrySuppressed = true; showPairing(); setStatus("No se pudo abrir la confirmación de seguridad."); }
 	}
 
     private void pair() {
@@ -279,7 +321,7 @@ public final class MainActivity extends Activity {
             JSONObject space = spaces.getJSONObject(0); workspaceId = space.getString("id"); workspaceName = space.optString("name", "ChatGPT 2"); sessionId = latestSession(space);
 			saveSecret("token", token); saveSecret("localToken", localToken); removeSecret("relayKey"); removeSecret("relayEncryptionKey"); removeSecret("relayDeviceToken");
 			getPreferences(MODE_PRIVATE).edit().putString("endpoint", base).putString("localEndpoint", localEndpoint).putString("workspace", workspaceId).putString("workspaceName", workspaceName).putString("session", sessionId).remove("remoteMode").remove("relayInstallation").apply();
-            ui(() -> { setStatus("Conectado al escritorio"); requestDeviceUnlock(); });
+            ui(() -> { setStatus("Conectado al escritorio"); unlockRetrySuppressed = false; requestDeviceUnlock(); });
         } catch (Exception error) { ui(() -> setStatus("No se pudo emparejar: " + error.getMessage())); } });
     }
 
@@ -310,7 +352,7 @@ public final class MainActivity extends Activity {
             JSONObject space = spaces.getJSONObject(0); workspaceId = space.getString("id"); workspaceName = space.optString("name", "ChatGPT 2"); sessionId = latestSession(space);
 			saveSecret("relayKey", relayKey); saveSecret("relayEncryptionKey", relayEncryptionKey); saveSecret("relayDeviceToken", relayDeviceToken); removeSecret("token");
 			getPreferences(MODE_PRIVATE).edit().putString("endpoint", normalize(base)).putString("workspace", workspaceId).putString("workspaceName", workspaceName).putString("session", sessionId).putString("remoteMode", "anywhere").putString("relayInstallation", relayInstallation).apply();
-            ui(() -> { setStatus("Canal cifrado emparejado"); requestDeviceUnlock(); });
+            ui(() -> { setStatus("Canal cifrado emparejado"); unlockRetrySuppressed = false; requestDeviceUnlock(); });
         } catch (Exception error) { anywhere = false; ui(() -> setStatus("No se pudo emparejar: " + error.getMessage())); } });
     }
 
@@ -333,7 +375,7 @@ public final class MainActivity extends Activity {
 			JSONObject space = spaces.getJSONObject(0); workspaceId = space.getString("id"); workspaceName = space.optString("name", "ChatGPT 2"); sessionId = latestSession(space);
 			saveSecret("localToken", localToken); saveSecret("relayKey", relayKey); saveSecret("relayEncryptionKey", relayEncryptionKey); saveSecret("relayDeviceToken", relayDeviceToken); removeSecret("token");
 			getPreferences(MODE_PRIVATE).edit().putString("endpoint", relay).putString("localEndpoint", localEndpoint).putString("workspace", workspaceId).putString("workspaceName", workspaceName).putString("session", sessionId).putString("remoteMode", "anywhere").putString("relayInstallation", relayInstallation).apply();
-			ui(() -> { setStatus(localToken.isEmpty() ? "Relay cifrado emparejado" : "LAN + relay emparejados"); requestDeviceUnlock(); });
+			ui(() -> { setStatus(localToken.isEmpty() ? "Relay cifrado emparejado" : "LAN + relay emparejados"); unlockRetrySuppressed = false; requestDeviceUnlock(); });
 		} catch (Exception error) { anywhere = false; ui(() -> setStatus("No se pudo emparejar: " + error.getMessage())); } });
 	}
 
@@ -708,7 +750,7 @@ public final class MainActivity extends Activity {
         setStatus("Ese QR no pertenece a ChatGPT 2 Remote.");
     }
 
-    @Override protected void onActivityResult(int request, int result, Intent data) { super.onActivityResult(request, result, data); if (request == PICK_FILES) { if (fileCallback != null) { fileCallback.onReceiveValue(result == RESULT_OK ? WebChromeClient.FileChooserParams.parseResult(result, data) : null); fileCallback = null; } return; } if (request == SCAN_QR && result == RESULT_OK && data != null) applyPairingPayload(data.getStringExtra(QrScannerActivity.RESULT_PAYLOAD)); if (request == UNLOCK_CHAT) { unlockInFlight = false; if (result == RESULT_OK) { appUnlocked = true; showChat(); setStatus("Canal seguro desbloqueado"); refresh(); } else { showPairing(); setStatus("Desbloquea el teléfono para abrir ChatGPT 2 Remote."); } } }
+    @Override protected void onActivityResult(int request, int result, Intent data) { super.onActivityResult(request, result, data); if (request == PICK_FILES) { if (fileCallback != null) { fileCallback.onReceiveValue(result == RESULT_OK ? WebChromeClient.FileChooserParams.parseResult(result, data) : null); fileCallback = null; } return; } if (request == SCAN_QR && result == RESULT_OK && data != null) applyPairingPayload(data.getStringExtra(QrScannerActivity.RESULT_PAYLOAD)); if (request == UNLOCK_CHAT) { unlockInFlight = false; main.removeCallbacks(unlockWhenReady); if (result == RESULT_OK) { appUnlocked = true; unlockRetrySuppressed = false; showChat(); setStatus("Canal seguro desbloqueado"); refresh(); } else { appUnlocked = false; unlockRetrySuppressed = true; showPairing(); setStatus("Desbloquea el teléfono para abrir ChatGPT 2 Remote. Bloquea y desbloquea la pantalla para reintentar."); } } }
     private JSONObject request(String base, String method, String path, JSONObject body, String bearer) throws Exception { HttpURLConnection c = connection(base + path, method, bearer); if (body != null) { c.setDoOutput(true); byte[] bytes = body.toString().getBytes(StandardCharsets.UTF_8); c.setFixedLengthStreamingMode(bytes.length); try (OutputStream out = c.getOutputStream()) { out.write(bytes); } } int code = c.getResponseCode(); InputStream stream = code >= 400 ? c.getErrorStream() : c.getInputStream(); String text = read(stream); c.disconnect(); JSONObject result = new JSONObject(text.isEmpty() ? "{}" : text); if (code >= 400) throw new IOException(result.optString("error", "HTTP " + code)); return result; }
 	private JSONObject relayRequest(JSONObject command) throws Exception {
 		if (!anywhere || relayInstallation.isEmpty() || relayEncryptionKey.isEmpty() || relayDeviceToken.isEmpty()) throw new IOException("El acceso remoto no está configurado.");

@@ -9,3 +9,6 @@ node_modules/
 android/build/
 android/dist/
 android/.tools/
+.delegacion/
+.forja/
+.project-context/

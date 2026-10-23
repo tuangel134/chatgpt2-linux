@@ -59,7 +59,8 @@ function createFakeIpc(codexHome) {
         if (m.method === "initialize") { ok({ clientId: me.id }); continue; }
         calls.push({ method: m.method, params: m.params, version: m.version, hostId: m.hostId });
         const tid = m.params && (m.params.conversationId || m.params.threadId);
-        if (m.method === "thread-owner-discovery") { if (tid === "t-busy" && m.params.hostId === "local") ok({ supportsUntrustedAppInput: true }); else err("no-client-found"); }
+        const opened = tid === "t-lock" && fs.existsSync(path.join(codexHome, "opened-t-lock"));
+        if (m.method === "thread-owner-discovery") { if ((tid === "t-busy" || opened) && m.params.hostId === "local") ok({ supportsUntrustedAppInput: true }); else err("no-client-found"); }
         else if (m.method === "thread-follower-start-turn") { const id = "tt" + (calls.length); ok({ result: { turn: { id, status: "inProgress", items: [] } } }); runTurn(id, m.params.turnStart.request.input[0].text); }
         else if (m.method === "thread-follower-interrupt-turn") { clearTimeout(state.timers && state.timers[m.params.expectedTurnId]); const t = state.turns[m.params.expectedTurnId]; if (t) { t.status = "interrupted"; patches([{ op: "replace", path: ["threadRuntimeStatus"], value: { type: "idle" } }, { op: "replace", path: [...base(m.params.expectedTurnId), "status"], value: "interrupted" }]); } ok({ interruptedTurnId: m.params.expectedTurnId, ok: true }); }
         else if (m.method === "thread-follower-compact-thread") { ok({ ok: true }); patches([{ op: "replace", path: ["threadRuntimeStatus"], value: { type: "active", activeFlags: [] } }]); setTimeout(() => patches([{ op: "replace", path: ["threadRuntimeStatus"], value: { type: "idle" } }]), 150); }

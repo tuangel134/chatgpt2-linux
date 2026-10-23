@@ -37,7 +37,7 @@ test.before(async () => {
   fs.mkdirSync(path.join(TMP, "codex-home", "sqlite"), { recursive: true });
   cp.spawnSync("python3", ["-I", "-c", "import sqlite3,sys;c=sqlite3.connect(sys.argv[1]);c.execute('create table automations(id text,status text,next_run_at integer,last_run_at integer)');c.execute(\"insert into automations values('a-tarde','ACTIVE',2000000000000,1999999000000)\");c.execute(\"insert into automations values('a-lunes','PAUSED',1900000000000,null)\");c.commit()", path.join(TMP, "codex-home", "sqlite", "codex-dev.db")]);
   agent = cp.spawn(process.execPath, [path.join(__dirname, "..", "agent.cjs")], {
-    env: { ...process.env, CODEX_HOME: path.join(TMP, "codex-home"), HOME: TMP, CHATGPT2_REMOTE_PORT: String(AGENT_PORT), CHATGPT2_CODEX_BIN: path.join(__dirname, "fake-codex.cjs"),
+    env: { ...process.env, CODEX_HOME: path.join(TMP, "codex-home"), HOME: TMP, CHATGPT2_REMOTE_PORT: String(AGENT_PORT), CHATGPT2_CODEX_BIN: path.join(__dirname, "fake-codex.cjs"), CHATGPT2_APP_BIN: path.join(__dirname, "fake-app.sh"),
       CHATGPT2_REMOTE_ALLOW_LOOPBACK: "1", CHATGPT2_REMOTE_POLL_FAST_MS: "60", CHATGPT2_REMOTE_POLL_IDLE_MS: "60" }, stdio: "ignore" });
   for (let i = 0; i < 50; i++) { try { await fetch(`http://127.0.0.1:${AGENT_PORT}/status`); break; } catch { await new Promise((r) => setTimeout(r, 100)); } }
   const s = await control("POST", "/start", { relayUrl: `http://127.0.0.1:${RELAY_PORT}` });
@@ -220,6 +220,15 @@ test("conversación abierta en la app de escritorio: se escribe en la MISMA conv
   assert.equal(st.status, "done"); assert.equal(st.result, "Hola desde la PC");
   const m = (await phone.ask({ type: "messages", workspaceId: ws.id, sessionId: "t-busy" })).messages;      // el historial sale del estado en vivo de la PC
   assert.deepEqual(m.slice(-3).map((x) => x.role + ":" + x.message.parts[0].text), ["user:hola desde el teléfono", "tool:ls", "assistant:Hola desde la PC"]);
+});
+
+test("conversación cargada en la PC pero sin ventana: se le pide a la app que la abra y se escribe por su IPC", async () => {
+  const ws = (await phone.ask({ type: "status" })).workspaces.find((w) => w.name === "web");
+  const f = await phone.ask({ type: "send", workspaceId: ws.id, sessionId: "t-lock", text: "hola" });
+  assert.equal(f.ok, true, JSON.stringify(f)); assert.equal(f.sessionId, "t-lock");
+  assert.ok(fs.existsSync(path.join(TMP, "codex-home", "opened-t-lock")), "se lanzó el enlace codex://threads/t-lock");
+  assert.equal(desktop.calls.filter((c) => c.method === "thread-follower-start-turn" && c.params.conversationId === "t-lock").length, 1);
+  await new Promise((r) => setTimeout(r, 450));   // deja terminar el turno simulado
 });
 
 test("lo que pasa en la PC se ve desde el teléfono (poll) y se puede detener", async () => {
