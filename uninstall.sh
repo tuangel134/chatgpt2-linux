@@ -20,6 +20,7 @@ echo "Cerrando procesos de ChatGPT 2..."
 pkill -f "[u]ser-data-dir=$HOME/.config/Codex-2" 2>/dev/null || true
 pkill -f "$PREFIX/modelhub/modelhub.py" 2>/dev/null || true
 pkill -f "$PREFIX/mastermcp/host.cjs" 2>/dev/null || true
+pkill -f "$PREFIX/remote/agent.cjs" 2>/dev/null || true
 pkill -f "$PREFIX/cliproxyapi/cli-proxy-api" 2>/dev/null || true
 sleep 1
 

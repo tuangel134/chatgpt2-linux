@@ -5,3 +5,7 @@ node_modules/
 *.asar
 *.log
 .env
+
+android/build/
+android/dist/
+android/.tools/

@@ -39,5 +39,9 @@ if [ -n "$NODE" ] && [ -f "$ROOT/mastermcp/host.cjs" ] && ! is_listening 8319; t
   # Master MCP arranca apagado: se activa desde Ajustes → Master MCP.
   setsid "$NODE" "$ROOT/mastermcp/host.cjs" >/dev/null 2>&1 < /dev/null &
 fi
+if [ -n "$NODE" ] && [ -f "$ROOT/remote/agent.cjs" ] && ! is_listening 8324; then
+  # Agente de control remoto (móvil): solo sale hacia tu relay cuando lo activas en Ajustes.
+  setsid "$NODE" "$ROOT/remote/agent.cjs" >/dev/null 2>&1 < /dev/null &
+fi
 # shellcheck disable=SC2086
 exec "$ROOT/ChatGPT" --user-data-dir="$HOME/.config/Codex-2" $CHATGPT2_FLAGS "$@"

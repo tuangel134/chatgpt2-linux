@@ -16,6 +16,7 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -38,6 +39,7 @@ CODEX_TOML = CODEX_HOME / "config.toml"
 PORT = 8318
 CPA_PORT = 8317
 DEFAULT_GO_MODEL = "go-deepseek-v4.1-flash"  # modelo principal por defecto cuando se conecta OpenCode Go
+REMOTE_PORT = 8324  # agente de control remoto (móvil), ver remote/agent.cjs
 ROUTER_PORT = 8323  # enrutador local (AUTO y saneado de cápsulas); solo escucha en 127.0.0.1
 CPA_PID = CODEX_HOME / "cliproxyapi.pid"
 LOGIN_FLAGS = {"codex": "-codex-login", "claude": "-claude-login", "antigravity": "-antigravity-login"}
@@ -718,6 +720,43 @@ def catalog_names():
         return []
 
 
+def remote_alive():
+    import socket
+    try:
+        socket.create_connection(("127.0.0.1", REMOTE_PORT), 0.3).close()
+        return True
+    except OSError:
+        return False
+
+
+def remote_call(method, path, body=None, timeout=30):
+    """Habla con el agente remoto (loopback + token del hub); si no está en marcha, lo arranca."""
+    import shutil
+    if not remote_alive():
+        node, agent = shutil.which("node"), ROOT / "remote/agent.cjs"
+        if not node or not agent.exists():
+            raise RuntimeError("El control remoto necesita node 18+ y la carpeta remote/ de la instalación.")
+        subprocess.Popen([node, str(agent)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
+                         start_new_session=True, env={**os.environ, "CHATGPT2_HOME": str(ROOT), "CODEX_HOME": str(CODEX_HOME)})
+        for _ in range(40):
+            if remote_alive():
+                break
+            time.sleep(0.25)
+    req = urllib.request.Request(f"http://127.0.0.1:{REMOTE_PORT}{path}", method=method, data=None if body is None else json.dumps(body).encode(),
+                                 headers={"X-Hub-Token": read_token(), "Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return json.load(r)
+    except urllib.error.HTTPError as e:
+        try:
+            msg = json.load(e).get("error")
+        except Exception:
+            msg = None
+        raise RuntimeError(msg or f"El agente remoto respondió {e.code}")
+    except urllib.error.URLError as e:
+        raise RuntimeError(f"El agente remoto no responde ({e.reason})")
+
+
 def go_status(st):
     k = go_key(st)
     ents = go_entries(st) if k else []
@@ -789,6 +828,8 @@ class H(BaseHTTPRequestHandler):
                                  "auto": (st.get("auto") or {}).get("models", []), "auto_last": auto_last,
                                  "opencode_go": go_status(st), "credentials": credentials(), "routing": strategy(st),
                                  "catalog": catalog_names(), "default_model": (st.get("default_model") or {}).get("slug", "")})
+            elif self.path in ("/remote/status", "/remote/devices"):
+                self._send(200, remote_call("GET", self.path[len("/remote"):]))
             elif self.path.startswith("/login/"):
                 self._send(200, login_status(self.path.split("/")[2]))
             else:
@@ -861,6 +902,8 @@ class H(BaseHTTPRequestHandler):
             if self.path == "/apply":
                 n = apply_all()
                 self._send(200, {"ok": True, "models": n})
+            elif self.path in ("/remote/start", "/remote/stop", "/remote/rotate", "/remote/revoke-device", "/remote/settings"):
+                self._send(200, remote_call("POST", self.path[len("/remote"):], self._body()))
             elif self.path == "/opencode-go/refresh":
                 r = go_refresh()
                 if r is None:

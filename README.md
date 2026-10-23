@@ -24,6 +24,7 @@ Conecta Antigravity (Gemini), Claude, ChatGPT o cualquier API compatible con Ope
    - [Modo AUTO](#modo-auto-cambia-de-modelo-solo)
 7. [Modo «ChatGPT Web»](#modo-chatgpt-web)
 8. [Master MCP](#master-mcp)
+   - [Control desde el teléfono](#control-desde-el-teléfono)
 9. [Generación de imágenes](#generación-de-imágenes)
 10. [Actualizar y desinstalar](#actualizar-y-desinstalar)
 11. [Solución de problemas](#solución-de-problemas)
@@ -64,13 +65,16 @@ Todo corre en tu máquina. Tu ChatGPT/Codex de siempre **no se toca**: la copia 
 | **CLIProxyAPI** (`:8317`) | Proxy de código abierto ([router-for-me/CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI)). Habla con Antigravity, Claude y ChatGPT mediante OAuth y expone todo como una API compatible con OpenAI. | `cliproxyapi/cli-proxy-api` |
 | **Enrutador AUTO** (`:8323`) | Vive dentro de ModelHub. Cuando eliges modelos para AUTO, Codex habla con él en vez de con el proxy: reenvía todo tal cual y, si la petición es para `auto`, prueba tus modelos por orden y pasa al siguiente cuando uno falla. | `modelhub/modelhub.py` |
 | **OpenCode Go** | Con tu clave de la suscripción Go expone **todos** sus modelos (GLM, Kimi, DeepSeek, Qwen, MiniMax, MiMo, GPT, Grok, Claude Haiku, Gemini…), cada uno por el protocolo que le toca. | `modelhub/opencode_go.py` |
+| **Agente remoto** (`:8324`) | Deja usar ChatGPT 2 desde el teléfono (como «Codex remote control»): sale hacia **tu** relay de Cloudflare, se empareja con un QR y todo va cifrado de punta a punta. Usa tus hilos de Codex. | `remote/` |
+| **ChatGPT 2 Remote** (APK) | La app Android que se empareja y chatea con tu PC. | `android/` |
+| **Relay** | Worker de Cloudflare (buzón cifrado) que despliegas tú. | `relay/` |
 | **Pantalla «Modelos personalizados»** | La interfaz de Ajustes para conectar cuentas, añadir proveedores y aplicar cambios. | `modelhub/custom-models-settings.js` |
 | **Pestaña «ChatGPT Web»** (`:8322`) | Una vista nativa de chatgpt.com dentro de la ventana, con sesión persistente propia, mismo color que la app y un menú de modos que se abre por encima de la web. **No automatiza ni lee la página.** | `modelhub/chatgpt_web_view.js` y `chatgpt_web_overlay.js` |
 | **Master MCP** (`:8319`) | Servidor MCP local con herramientas de carpetas y navegador, protegido con OAuth. Apagado por defecto. | `mastermcp/` |
 | **`gemini_media_mcp.py`** | Servidor MCP que da `generate_image` a cualquier modelo usando las cuentas de Antigravity. | `modelhub/gemini_media_mcp.py` |
 | **Lanzador `chatgpt2`** | Levanta lo que falte (proxy, hub, Master MCP) y abre la app con su propio perfil. | `bin/chatgpt2` |
 
-Los puertos (8317, 8318, 8319, 8323 y 8322) escuchan **solo en `127.0.0.1`**.
+Los puertos (8317, 8318, 8319, 8322, 8323 y 8324) escuchan **solo en `127.0.0.1`**.
 
 ---
 
@@ -286,6 +290,36 @@ Requiere `node` 18 o superior; si no lo hay, el instalador lo deja desactivado y
 
 ---
 
+## Control desde el teléfono
+
+Para usar ChatGPT 2 desde el móvil (como el *remote control* de Codex), con **tus** modelos del hub (Antigravity, Claude, OpenCode Go, AUTO…). Se compone de tres piezas: el **agente** en tu PC (`remote/`), un **relay** tuyo en Cloudflare (`relay/`) y la **app Android** (`android/`).
+
+```
+ teléfono (ChatGPT 2 Remote) ──cifrado AES-GCM──▶ relay (tu Worker) ◀──la PC sale a buscarlo── agente ──▶ codex app-server ──▶ tus modelos
+```
+
+**Qué puedes hacer desde el teléfono:** ver tus carpetas de trabajo y las conversaciones de Codex (las mismas de la app de escritorio), abrir una, empezar una nueva, escribir (la tarea corre en la PC y el teléfono sigue su estado), cancelar una tarea en curso y pedir una captura del escritorio. Lo que hagas allí aparece en la app de escritorio y al revés.
+
+**Puesta en marcha (una vez):**
+
+1. **Despliega tu relay** (gratis, ver [`relay/README.md`](relay/README.md)): `cd relay && npm install && npx wrangler login && npx wrangler deploy`. Te da una URL `https://chatgpt2-relay.<tu-usuario>.workers.dev`.
+2. **Instala la app en el teléfono.** Descarga `chatgpt2-remote.apk` de las *Releases* del repositorio (o compílala: `cd android && ./build-apk.sh`, necesita el SDK de Android con build-tools 35 y un JDK 17+) e instálala (Android pedirá permitir instalar apps de esta fuente). La app pide el bloqueo de pantalla del teléfono para abrirse.
+3. En ChatGPT 2: **Ajustes → Modelos personalizados → Control desde el teléfono**, pega la URL de tu relay y pulsa **Activar y mostrar QR**.
+4. En el teléfono: abre **ChatGPT 2 Remote → Escanear código QR** y apunta al QR de la pantalla. Listo: aparecen tus proyectos y conversaciones.
+
+**Ajustes del teléfono** (en la misma sección): el **modelo** con el que contestan las tareas que escribas allí (por defecto el de Codex; puedes elegir AUTO u otro) y los **permisos** de esas tareas: *solo lectura*, *escribir en la carpeta del proyecto* (recomendado) o *acceso completo* (peligroso). Desde el teléfono las acciones que pedirían aprobación se **rechazan** en vez de aprobarse a ciegas, por eso conviene el permiso intermedio.
+
+**Seguridad:**
+
+- Todo va cifrado de punta a punta (AES-256-GCM); la clave solo viaja en el QR, que se consume la primera vez que un teléfono lo usa. El relay solo ve paquetes opacos.
+- Hasta 8 teléfonos. Cada uno puede **desemparejarse** por separado, y **Renovar claves** o **Desactivar y desemparejar todo** borran la sala del relay al instante.
+- El agente solo hace conexiones de salida (nada escucha en tu red). Su control local (`127.0.0.1:8324`) exige el token del hub y rechaza páginas web.
+- Quien tenga acceso a tu teléfono desbloqueado y emparejado puede ejecutar tareas en tu PC con los permisos que elijas: protege el teléfono y elige permisos prudentes.
+
+**Requisitos y límites:** la PC debe estar **encendida y sin suspender** (el agente sigue funcionando con la ventana de ChatGPT 2 cerrada, mientras el hub esté levantado); hace falta Node 18+. No existen las funciones de Tessarion que la app original traía (navegador de la PC, agentes externos): dan un aviso claro. Las capturas usan `spectacle`, `grim`, `gnome-screenshot`, `scrot` o `import`, lo que haya instalado.
+
+El protocolo (emparejamiento por QR `F3|relay|instalación|clave|cifrado`, órdenes `status`, `messages`, `send`, `job`, `cancel`, `screenshot`) es el de *Forja Remote Anywhere* del proyecto Tessarion; la app Android y el relay son una adaptación de ese código (de su mismo autor).
+
 ## Generación de imágenes
 
 Cuando tienes una cuenta de **Antigravity** conectada, todos los modelos del clon ganan la herramienta `generate_image` (texto → imagen, y edición con imágenes de referencia). Las imágenes se guardan en `~/.codex-2/generated_images/gemini/`. Si la cuota de la cuenta se agota, la herramienta te dice cuándo se restablece.
@@ -331,7 +365,7 @@ El instalador lo comprueba con `ldd` y lista lo que falte. Instálalo con tu ges
 **«Los parches NO encajaron».**
 Estás usando una versión de la app distinta a la probada. Vuelve a ejecutar sin `--version`.
 
-**Un puerto está ocupado (8317, 8318, 8319, 8323 o 8322).**
+**Un puerto está ocupado (8317, 8318, 8319, 8322, 8323 u 8324).**
 Los puertos son fijos. Cierra lo que los use o la otra instancia de ChatGPT 2: `pkill -f 'user-data-dir=.*Codex-2'`.
 
 **El inicio de sesión de Antigravity/Claude no abre el navegador.**
@@ -381,6 +415,12 @@ chatgpt2-linux/
 │   ├── tests/test_opencode_go.py   OpenCode Go de punta a punta con un servidor falso y CLIProxyAPI real
 │   ├── tests/test_accounts.py      varias cuentas: estado, uso, pausar y reparto (cuentas falsas, CLIProxyAPI real)
 │   └── restart-clone.sh            botón «Reiniciar» de Ajustes
+├── remote/                 agente de control remoto (Node, sin dependencias) + QR + pruebas
+│   ├── agent.cjs           relay cifrado ↔ codex app-server
+│   ├── qr.cjs              codificador de QR (versión 8-L)
+│   └── test/               relay, Codex y teléfono falsos: `node --test remote/test/`
+├── relay/                  Worker de Cloudflare (buzón cifrado) para desplegar el tuyo
+├── android/                app «ChatGPT 2 Remote» (Java, se compila sin Gradle con ./build-apk.sh)
 ├── mastermcp/              Master MCP (host.cjs compilado + fuentes TypeScript + pruebas)
 └── docs/img/               capturas
 ```

@@ -73,6 +73,8 @@ function mount(root) {
   const imageBox = h("div", { style: { display: "flex", flexWrap: "wrap", gap: "6px" } });
   const modelsBox = h("div", { style: { display: "flex", flexWrap: "wrap", gap: "6px" } });
   const goBox = h("div", { style: { ...S.card } });
+  const remoteBox = h("div", { style: { ...S.card } });
+  const remote = { st: null, devices: [], err: "", qrDevices: null, busy: false };
   const defaultSel = h("select", { style: { ...S.btn, maxWidth: "420px" }, onChange: async (e) => {
     try { await api("PUT", "/default-model", { slug: e.target.value }); await applyNow("Modelo principal cambiado."); } catch (err) { say("Error: " + err.message, true); }
   } });
@@ -95,6 +97,75 @@ function mount(root) {
     } catch (e) {
       say("No se pudo contactar con el servicio local de modelos (127.0.0.1:8318). Ábrelo con el comando chatgpt2. " + e.message, true);
     }
+  }
+
+  // ---- Control desde el teléfono (agente remoto, vía el hub)
+  function drawQr(canvas, rows) {
+    const q = 4, sc = 5, n = rows.length;
+    canvas.width = canvas.height = (n + q * 2) * sc;
+    const c = canvas.getContext("2d");
+    c.fillStyle = "#fff"; c.fillRect(0, 0, canvas.width, canvas.height);
+    c.fillStyle = "#000";
+    rows.forEach((row, r) => { for (let col = 0; col < row.length; col++) if (row[col] === "1") c.fillRect((col + q) * sc, (r + q) * sc, sc, sc); });
+  }
+  async function refreshRemote() {
+    try {
+      remote.st = await api("GET", "/remote/status");
+      remote.devices = remote.st.configured ? (await api("GET", "/remote/devices")).devices : [];
+      remote.err = "";
+    } catch (e) { remote.err = e.message; }
+    if (remote.qrDevices != null && remote.devices.length > remote.qrDevices) remote.qrDevices = null; // alguien se emparejó: ese QR ya no sirve
+    const sig = JSON.stringify([remote.st && [remote.st.running, remote.st.configured, remote.st.relayUrl, remote.st.pairingPayload, remote.st.jobs, remote.st.settings], remote.devices, remote.err, remote.qrDevices, state.catalog.length]);
+    if (sig === remote.sig) return;  // sin cambios: no se repinta (así no se cierran los desplegables)
+    remote.sig = sig;
+    paintRemote();
+  }
+  async function remoteDo(path, body, okText) {
+    if (remote.busy) return; remote.busy = true;
+    try { remote.st = await api("POST", "/remote/" + path, body || {}); if (okText) say(okText); } catch (e) { say("Error: " + e.message, true); }
+    remote.busy = false; await refreshRemote();
+  }
+  function paintRemote() {
+    const st = remote.st, cfg = st && st.configured;
+    const relayIn = h("input", { style: S.input, placeholder: "https://tu-relay.workers.dev", value: (st && st.settings && st.settings.relayUrl) || "" });
+    const showQr = async () => {
+      const relayUrl = relayIn.value.trim() || (st && st.relayUrl) || "";
+      if (!relayUrl) return say("Escribe la URL de tu relay (ver el README: se despliega con un Worker de Cloudflare).", true);
+      try { remote.qrDevices = cfg ? remote.devices.length : 0; await remoteDo("start", { relayUrl }); } catch (e) { say("Error: " + e.message, true); }
+    };
+    const modelSel = h("select", { style: { ...S.btn, maxWidth: "380px" }, onChange: (e) => remoteDo("settings", { model: e.target.value }, "Modelo del teléfono cambiado.") },
+      h("option", { value: "" }, "El predeterminado de Codex"), ...state.catalog.map((m) => h("option", { value: m.slug }, m.name)));
+    modelSel.value = (st && st.settings && st.settings.model) || "";
+    const permSel = h("select", { style: { ...S.btn, maxWidth: "380px" }, onChange: (e) => remoteDo("settings", { permission: e.target.value }, "Permiso del teléfono cambiado.") },
+      h("option", { value: "read-only" }, "Solo lectura (no modifica nada)"), h("option", { value: "workspace-write" }, "Escribir en la carpeta del proyecto (recomendado)"), h("option", { value: "danger-full-access" }, "Acceso completo (peligroso)"));
+    permSel.value = (st && st.settings && st.settings.permission) || "workspace-write";
+    const canvas = h("canvas", { style: { width: "220px", height: "220px", imageRendering: "pixelated", borderRadius: "10px", background: "#fff" } });
+    const showingQr = cfg && st.qr && remote.qrDevices != null;
+    if (showingQr) drawQr(canvas, st.qr);
+    const ago = (t) => { if (!t) return "sin actividad aún"; const m = Math.round((Date.now() - t) / 60000); return m < 1 ? "activo ahora" : m < 60 ? "hace " + m + " min" : "hace " + Math.round(m / 60) + " h"; };
+    remoteBox.replaceChildren(...[
+      remote.err ? h("div", { style: { color: "#ef4444", fontSize: "13px" } }, remote.err) : null,
+      h("div", { style: { display: "flex", flexWrap: "wrap", gap: "8px", alignItems: "center" } },
+        h("b", {}, !st ? "Consultando…" : cfg ? (st.running ? "Activo" : "En pausa") : "Desactivado"),
+        cfg ? h("span", { style: S.muted }, "relay " + st.relayUrl + (st.jobs ? " · " + st.jobs + " tarea(s) en curso" : "")) : null),
+      !cfg ? h("div", { style: { display: "flex", flexWrap: "wrap", gap: "10px", alignItems: "flex-end" } }, field("URL de tu relay (Cloudflare Worker)", relayIn, "2 1 320px"), h("button", { style: S.primary, onClick: showQr }, "Activar y mostrar QR")) : null,
+      cfg ? h("div", { style: { display: "flex", flexWrap: "wrap", gap: "8px" } },
+        h("button", { style: S.btn, onClick: showQr }, "Mostrar QR para otro teléfono"),
+        st.running ? h("button", { style: S.btn, onClick: () => { remote.qrDevices = null; remoteDo("stop", { revoke: false }, "Control remoto en pausa."); } }, "Pausar")
+                   : h("button", { style: S.btn, onClick: showQr }, "Reanudar"),
+        h("button", { style: S.btn, onClick: () => { if (confirm("Se generan claves nuevas y TODOS los teléfonos emparejados dejan de funcionar. ¿Continuar?")) { remote.qrDevices = 0; remoteDo("rotate", {}, "Claves renovadas: escanea el QR nuevo."); } } }, "Renovar claves"),
+        h("button", { style: { ...S.btn, color: "#ef4444" }, onClick: () => { if (confirm("¿Desactivar el control remoto y desemparejar todos los teléfonos?")) { remote.qrDevices = null; remoteDo("stop", { revoke: true }, "Control remoto desactivado."); } } }, "Desactivar y desemparejar todo")) : null,
+      showingQr ? h("div", { style: { display: "flex", flexWrap: "wrap", gap: "14px", alignItems: "center" } }, canvas,
+        h("div", { style: { ...S.muted, flex: "1 1 260px", lineHeight: "1.5" } }, "Abre la app «ChatGPT 2 Remote» en el teléfono, pulsa «Escanear código QR» y apunta aquí. El QR sirve una sola vez y contiene las claves de cifrado: no lo compartas ni lo captures.")) : null,
+      cfg && !showingQr && remote.devices.length ? h("div", { style: { ...S.muted } }, "QR oculto (ya se usó). Pulsa «Mostrar QR para otro teléfono» para emparejar otro.") : null,
+      cfg ? h("div", { style: { display: "flex", flexDirection: "column", gap: "6px" } }, h("b", { style: { fontSize: "13px" } }, "Teléfonos emparejados (" + remote.devices.length + ")"),
+        ...(remote.devices.length ? remote.devices.map((d) => h("div", { style: { display: "flex", alignItems: "center", gap: "10px", justifyContent: "space-between", border: BORDER, borderRadius: "10px", padding: "6px 10px" } },
+          h("span", { style: { fontSize: "13px" } }, d.label || "Teléfono", h("span", { style: S.muted }, "  " + d.platform + " · " + ago(d.lastSeenAt))),
+          h("button", { style: S.btn, onClick: async () => { if (!confirm("¿Desemparejar " + (d.label || "este teléfono") + "?")) return; await remoteDo("revoke-device", { id: d.id }, "Teléfono desemparejado."); } }, "Desemparejar")))
+          : [h("div", { style: S.muted }, "Ninguno todavía.")])) : null,
+      h("div", { style: { display: "flex", flexWrap: "wrap", gap: "14px" } },
+        field("Modelo para lo que escribas desde el teléfono", modelSel), field("Permisos de las tareas del teléfono", permSel)),
+      h("div", { style: S.muted }, "Tus conversaciones de Codex (las mismas de esta app) aparecen en el teléfono, y lo que escribas allí aparece aquí. Todo va cifrado de punta a punta por tu relay; el relay solo ve paquetes opacos. La PC debe estar encendida (no suspendida) y con ChatGPT 2 abierto o su agente en marcha. Desde el teléfono no se aprueba nada a ciegas: las acciones que pidan aprobación se rechazan, por eso conviene el permiso «Escribir en la carpeta del proyecto».")].filter(Boolean));
   }
 
   function paint() {
@@ -130,6 +201,7 @@ function mount(root) {
     provBox.replaceChildren(...state.providers.map(providerCard));
     paintGo();
     paintAuto();
+    paintRemote();
     defaultSel.replaceChildren(...state.catalog.map((m) => h("option", { value: m.slug }, m.name)));
     if (state.defaultModel) defaultSel.value = state.defaultModel;
   }
@@ -281,6 +353,8 @@ function mount(root) {
         h("h2", { style: S.h2 }, "AUTO · cambia de modelo solo"),
         h("div", { style: S.muted }, "Aparece como un modelo más («AUTO») en el selector de Codex. Usa el primero de esta lista; si falla o se queda sin cuota o límite, pasa solo al siguiente (y lo vuelve a probar pasados unos minutos). Solo cambia antes de que el modelo empiece a responder: una respuesta ya empezada no se interrumpe. Al cambiar de modelo se descarta el razonamiento cifrado del anterior."),
         autoBox, autoSelect, autoLastEl),
+      h("section", { style: { display: "flex", flexDirection: "column", gap: "10px" } },
+        h("h2", { style: S.h2 }, "Control desde el teléfono (ChatGPT 2 Remote)"), remoteBox),
       h("section", { style: { display: "flex", flexDirection: "column", gap: "8px" } },
         h("h2", { style: S.h2 }, "Generación de imágenes (Gemini)"), imageBox,
         h("div", { style: S.muted }, "Cualquier modelo del clon puede pedir imágenes con la herramienta «generate_image» (también edita con imágenes de referencia y elige relación de aspecto). Las guarda en ~/.codex-2/generated_images/gemini/. Si la cuota de la cuenta se agota, la herramienta avisa cuándo se restablece.")),
@@ -291,6 +365,10 @@ function mount(root) {
       msgEl, restartNow));
 
   refresh(false);
+  refreshRemote();
+  let tick = 0;
+  const remoteTimer = setInterval(() => { if (dead) return; tick++; if (remote.qrDevices != null || tick % 5 === 0) refreshRemote(); }, 3000);
+  timers.add(remoteTimer);
   return () => { dead = true; timers.forEach(clearInterval); };
 }
 

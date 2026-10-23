@@ -261,7 +261,7 @@ if [ ! -f "$SRC_DIR/modelhub/patch_ui.py" ]; then
   curl -fsSL "https://github.com/$REPO/archive/refs/heads/main.tar.gz" | tar -xz -C "$WORK" || die "No se pudo bajar el repositorio."
   SRC_DIR="$WORK/$(basename "$REPO")-main"
 fi
-for d in modelhub mastermcp bin; do rm -rf "$PREFIX/$d"; cp -a "$SRC_DIR/$d" "$PREFIX/$d"; done
+for d in modelhub mastermcp bin remote; do rm -rf "$PREFIX/$d"; cp -a "$SRC_DIR/$d" "$PREFIX/$d"; done
 chmod +x "$PREFIX/bin/chatgpt2" "$PREFIX/modelhub/restart-clone.sh"
 info "hub de modelos, Master MCP y lanzador copiados ✓"
 
@@ -295,7 +295,7 @@ else
   warn "Los parches NO encajaron con la versión ${NEW_VER:-?} de la app (OpenAI cambió su código)."
   warn "La app queda sin parches (sin 'Modelos personalizados' ni 'ChatGPT Web'). Usa la versión probada: --version $APP_VERSION_TESTED"
 fi
-[ "$NODE_OK" -eq 1 ] || rm -f "$PREFIX/mastermcp/host.cjs"
+[ "$NODE_OK" -eq 1 ] || rm -rf "$PREFIX/mastermcp/host.cjs" "$PREFIX/remote"
 rm -rf "$PREFIX/resources/app-src"
 
 # ---------------------------------------------------------------- 7. comando y menú
