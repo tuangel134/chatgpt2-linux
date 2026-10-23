@@ -637,6 +637,33 @@ async function slash(c) {
   }
 }
 
+// ------------------------------------------------------------------ modelos, cuentas, proveedores y Master MCP (la API local del hub, con su token)
+const HUB_URL = () => `http://127.0.0.1:${process.env.CHATGPT2_HUB_PORT || 8318}`;
+const MCP_URL = () => `http://127.0.0.1:${process.env.CHATGPT2_MASTER_PORT || 8319}`;
+async function localApi(base, method, p, body) {
+  const tok = hubToken(); if (!tok) throw new Error("No encuentro el token del hub en la PC.");
+  let r;
+  try { r = await fetch(base + p, { method, headers: { "X-Hub-Token": tok, "Content-Type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(60000) }); }
+  catch (e) { throw new Error(base === MCP_URL() ? "Master MCP no responde (¿está abierta la app de la PC?)." : "El hub de modelos no responde (¿está abierta la app de la PC?)."); }
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.error || "Error " + r.status);
+  return data;
+}
+const FIXED = { state: ["GET", "/state"], providers: ["PUT", "/providers"], auto: ["PUT", "/auto"], routing: ["PUT", "/routing"], default: ["PUT", "/default-model"], "account-status": ["POST", "/account-status"], "go-key": ["PUT", "/opencode-go"], "go-delete": ["DELETE", "/opencode-go"], "go-refresh": ["POST", "/opencode-go/refresh"], apply: ["POST", "/apply"], restart: ["POST", "/restart"] };
+const MCP_OPS = { "mcp-state": ["GET", "/state"], "mcp-settings": ["POST", "/settings"], "mcp-test": ["GET", "/test"] };
+async function hubOp(c) {
+  const op = String(c.op || ""), body = c.body && typeof c.body === "object" ? c.body : undefined;
+  if (FIXED[op]) return localApi(HUB_URL(), FIXED[op][0], FIXED[op][1], FIXED[op][0] === "GET" || FIXED[op][0] === "DELETE" ? undefined : body || {});
+  if (MCP_OPS[op]) return localApi(MCP_URL(), MCP_OPS[op][0], MCP_OPS[op][1], MCP_OPS[op][0] === "GET" ? undefined : body || {});
+  const file = path.basename(String(c.file || "")), kind = String(c.kind || "");
+  if (op === "account-delete") { if (!/\.json$/.test(file)) throw new Error("Cuenta inválida."); return localApi(HUB_URL(), "DELETE", "/account/" + encodeURIComponent(file)); }
+  if (op === "login-start" || op === "login-status") {
+    if (!/^(antigravity|codex|claude)$/.test(kind)) throw new Error("Proveedor desconocido.");
+    return op === "login-start" ? localApi(HUB_URL(), "POST", "/login/" + kind, {}) : localApi(HUB_URL(), "GET", "/login/" + kind);
+  }
+  throw new Error("Operación desconocida.");
+}
+
 function capture() {
   const file = path.join(os.tmpdir(), `chatgpt2-shot-${process.pid}-${Date.now()}.png`);
   const tools = [["spectacle", ["-b", "-n", "-f", "-o", file]], ["grim", [file]], ["gnome-screenshot", ["-f", file]], ["scrot", ["-o", file]], ["import", ["-window", "root", file]]];
@@ -661,6 +688,7 @@ async function handleCommand(c) {
     }
     case "models": return { ok: true, ...(await models()) };
     case "poll": { if (!str("sessionId")) throw new Error("Falta sessionId."); return { ok: true, ...(await pollThread(str("sessionId"))) }; }
+    case "hub": return { ok: true, ...(await hubOp(c)) };
     case "slash": return { ok: true, ...(await slash(c)) };
     case "automations": return { ok: true, automations: automations(), now: Date.now() };
     case "upload": return { ok: true, ...uploadChunk(c) };

@@ -16,7 +16,7 @@ const { humanRrule } = require("../agent.cjs");
 const RELAY_PORT = 18910, AGENT_PORT = 18911;
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), "c2remote-"));
 const TOKEN = "hub-token-de-prueba";
-let agent, relay, phone, desktop;
+let agent, relay, phone, desktop, hubSrv, mcpSrv; const hubCalls = [];
 
 const control = async (method, p, body) => {
   const r = await fetch(`http://127.0.0.1:${AGENT_PORT}${p}`, { method, headers: { "X-Hub-Token": TOKEN, "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
@@ -28,6 +28,12 @@ test.before(async () => {
   await new Promise((r) => relay.server.listen(RELAY_PORT, "127.0.0.1", r));
   fs.mkdirSync(path.join(TMP, "codex-home"), { recursive: true });
   fs.writeFileSync(path.join(TMP, "codex-home", "hub-token"), TOKEN);
+  const fakeApi = (name) => require("node:http").createServer((req, res) => { let b = ""; req.on("data", (d) => (b += d)); req.on("end", () => {
+    hubCalls.push({ srv: name, method: req.method, url: req.url, token: req.headers["x-hub-token"], body: b ? JSON.parse(b) : null });
+    if (req.url === "/boom") { res.writeHead(400); return res.end(JSON.stringify({ error: "no vale" })); }
+    res.writeHead(200, { "Content-Type": "application/json" }); res.end(JSON.stringify(req.url === "/state" ? { name, models: ["m1"] } : { ok: true })); }); });
+  hubSrv = fakeApi("hub"); mcpSrv = fakeApi("mcp");
+  await new Promise((r) => hubSrv.listen(18920, "127.0.0.1", r)); await new Promise((r) => mcpSrv.listen(18921, "127.0.0.1", r));
   desktop = createFakeIpc(path.join(TMP, "codex-home")); await desktop.listen();
   const adir = path.join(TMP, "codex-home", "automations");
   for (const [id, name, rr, st] of [["a-tarde", "Publicar tarde", "RRULE:FREQ=DAILY;BYHOUR=15,21;BYMINUTE=0;BYSECOND=0", "ACTIVE"], ["a-lunes", "Resumen semanal", "RRULE:FREQ=WEEKLY;BYDAY=MO,WE;BYHOUR=9;BYMINUTE=30", "PAUSED"]]) {
@@ -37,7 +43,7 @@ test.before(async () => {
   fs.mkdirSync(path.join(TMP, "codex-home", "sqlite"), { recursive: true });
   cp.spawnSync("python3", ["-I", "-c", "import sqlite3,sys;c=sqlite3.connect(sys.argv[1]);c.execute('create table automations(id text,status text,next_run_at integer,last_run_at integer)');c.execute(\"insert into automations values('a-tarde','ACTIVE',2000000000000,1999999000000)\");c.execute(\"insert into automations values('a-lunes','PAUSED',1900000000000,null)\");c.commit()", path.join(TMP, "codex-home", "sqlite", "codex-dev.db")]);
   agent = cp.spawn(process.execPath, [path.join(__dirname, "..", "agent.cjs")], {
-    env: { ...process.env, CODEX_HOME: path.join(TMP, "codex-home"), HOME: TMP, CHATGPT2_REMOTE_PORT: String(AGENT_PORT), CHATGPT2_CODEX_BIN: path.join(__dirname, "fake-codex.cjs"), CHATGPT2_APP_BIN: path.join(__dirname, "fake-app.sh"),
+    env: { ...process.env, CODEX_HOME: path.join(TMP, "codex-home"), HOME: TMP, CHATGPT2_REMOTE_PORT: String(AGENT_PORT), CHATGPT2_CODEX_BIN: path.join(__dirname, "fake-codex.cjs"), CHATGPT2_APP_BIN: path.join(__dirname, "fake-app.sh"), CHATGPT2_HUB_PORT: "18920", CHATGPT2_MASTER_PORT: "18921",
       CHATGPT2_REMOTE_ALLOW_LOOPBACK: "1", CHATGPT2_REMOTE_POLL_FAST_MS: "60", CHATGPT2_REMOTE_POLL_IDLE_MS: "60" }, stdio: "ignore" });
   for (let i = 0; i < 50; i++) { try { await fetch(`http://127.0.0.1:${AGENT_PORT}/status`); break; } catch { await new Promise((r) => setTimeout(r, 100)); } }
   const s = await control("POST", "/start", { relayUrl: `http://127.0.0.1:${RELAY_PORT}` });
@@ -47,7 +53,7 @@ test.before(async () => {
   phone = new Phone(s.body.pairingPayload);
   assert.equal((await phone.pair()).status, 200);
 });
-test.after(() => { agent && agent.kill(); desktop && desktop.close(); relay && relay.server.close(); fs.rmSync(TMP, { recursive: true, force: true }); });
+test.after(() => { hubSrv && hubSrv.close(); mcpSrv && mcpSrv.close(); agent && agent.kill(); desktop && desktop.close(); relay && relay.server.close(); fs.rmSync(TMP, { recursive: true, force: true }); });
 
 test("control local exige el token del hub y rechaza páginas web", async () => {
   assert.equal((await fetch(`http://127.0.0.1:${AGENT_PORT}/status`)).status, 403);
@@ -252,6 +258,23 @@ test("/compactar en una conversación de la PC usa la orden de la propia app", a
   let st; for (let i = 0; i < 80; i++) { st = (await phone.ask({ type: "job", jobId: c.jobId })).status; if (st.status !== "running") break; await new Promise((x) => setTimeout(x, 50)); }
   assert.equal(st.status, "done"); assert.equal(st.result, "Contexto compactado.");
   assert.equal(desktop.calls.filter((x) => x.method === "thread-follower-compact-thread").pop().version, 2);
+});
+
+test("modelos, cuentas, proveedores y Master MCP: el agente reenvía a la API local del hub con su token", async () => {
+  const h = (o) => phone.ask({ type: "hub", ...o });
+  assert.deepEqual((await h({ op: "state" })).models, ["m1"]);
+  await h({ op: "auto", body: { models: ["a", "b"] } });
+  await h({ op: "routing", body: { strategy: "fill-first" } });
+  await h({ op: "account-status", body: { name: "antigravity-x.json", disabled: true } });
+  await h({ op: "account-delete", file: "../../etc/antigravity-x.json" });
+  await h({ op: "login-start", kind: "antigravity" }); await h({ op: "login-status", kind: "antigravity" });
+  await h({ op: "mcp-settings", body: { enabled: true, mode: "local", domain: "" } }); await h({ op: "mcp-state" });
+  const seen = hubCalls.map((c) => `${c.srv} ${c.method} ${c.url}`);
+  assert.deepEqual(seen.slice(-9), ["hub GET /state", "hub PUT /auto", "hub PUT /routing", "hub POST /account-status", "hub DELETE /account/antigravity-x.json", "hub POST /login/antigravity", "hub GET /login/antigravity", "mcp POST /settings", "mcp GET /state"]);
+  assert.ok(hubCalls.every((c) => c.token === TOKEN));
+  assert.deepEqual(hubCalls.find((c) => c.url === "/auto").body, { models: ["a", "b"] });
+  assert.equal((await h({ op: "borrar-todo" })).ok, false);
+  assert.equal((await h({ op: "login-start", kind: "../x" })).ok, false);
 });
 
 test("comandos «/»: compactar, revisar, renombrar, objetivo, estado, mcp, skills, archivos, diff, permisos, fork, archivar", async () => {

@@ -116,6 +116,21 @@ button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:poin
 .run{width:8px;height:8px;border-radius:50%;background:var(--accent);animation:b 1.1s infinite}
 .dfoot{display:flex;gap:8px;padding:8px 14px calc(10px + env(safe-area-inset-bottom));border-top:1px solid var(--line)}
 .dfoot button{flex:1;background:var(--surface);border-radius:14px;padding:10px;font-size:14px}
+/* ajustes de modelos / cuentas / Master MCP */
+#cfg{position:fixed;inset:0;background:var(--bg);z-index:36;display:none;flex-direction:column;padding-top:env(safe-area-inset-top)}
+#cfg.on{display:flex}
+#cfgh{display:flex;align-items:center;gap:6px;padding:8px 10px}#cfgh b{flex:1;font-size:18px}
+#cbody{flex:1;overflow-y:auto;padding:4px 14px calc(24px + env(safe-area-inset-bottom))}
+.csec{background:var(--surface);border-radius:16px;padding:12px 14px;margin:10px 0}
+.csec h3{margin:0 0 4px;font-size:16px}.csec .hint{color:var(--muted);font-size:13px;margin:0 0 8px;line-height:1.4}
+.crow{display:flex;align-items:center;gap:8px;padding:7px 0;border-top:1px solid var(--line)}.crow:first-of-type{border-top:0}
+.crow .n{flex:1;min-width:0;overflow-wrap:anywhere}.crow small{display:block;color:var(--muted);font-size:12px}
+.cbtn{background:var(--surface2);border-radius:12px;padding:8px 12px;font-size:14px;white-space:nowrap}.cbtn.pri{background:var(--accent);color:#000;font-weight:600}.cbtn.dng{color:#fca5a5}
+.cbtn:disabled{opacity:.5}
+.cin{width:100%;background:var(--bg);border:1px solid var(--line);border-radius:12px;padding:9px 12px;color:var(--text);font:inherit;margin:4px 0;outline:0}
+textarea.cin{min-height:110px;font:13px/1.4 ui-monospace,monospace}
+.sw{width:46px;height:26px;border-radius:13px;background:var(--surface2);position:relative;flex:none}.sw::after{content:"";position:absolute;top:3px;left:3px;width:20px;height:20px;border-radius:50%;background:#bbb;transition:.15s}.sw.on{background:var(--accent)}.sw.on::after{left:23px;background:#fff}
+.tag{white-space:nowrap;display:inline-block;font-size:11px;padding:2px 7px;border-radius:8px;background:var(--surface2);color:var(--muted);margin-left:6px}.tag.bad{color:#fca5a5}.tag.ok{color:var(--accent)}
 /* comandos «/» */
 #slashmenu{display:none;background:var(--surface);border-radius:18px;margin:0 2px 8px;max-height:46vh;overflow-y:auto;padding:4px}
 #slashmenu.on{display:block}
@@ -166,6 +181,7 @@ button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:poin
   <div id="dh"><b>ChatGPT 2</b><button class="icon" id="closeDrawer" aria-label="Cerrar"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
   <input id="search" placeholder="Buscar conversaciones" autocomplete="off">
   <button id="newchat"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#000" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>Nuevo chat</button>
+  <button class="proj" id="cfgBtn" style="margin:0 6px"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1.2l2-1.5-2-3.4-2.3.9a7 7 0 0 0-2-1.2L14 3h-4l-.6 2.6a7 7 0 0 0-2 1.2l-2.3-.9-2 3.4 2 1.5a7 7 0 0 0 0 2.4l-2 1.5 2 3.4 2.3-.9a7 7 0 0 0 2 1.2L10 21h4l.6-2.6a7 7 0 0 0 2-1.2l2.3.9 2-3.4-2-1.5c.1-.4.1-.8.1-1.2z"/></svg><span class="n">Modelos y cuentas</span></button>
   <button class="proj" id="autosBtn" style="margin:0 6px"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg><span class="n">Automatizaciones</span><span class="c" id="autosCount"></span></button>
   <div id="dscroll"></div>
   <div class="dfoot"><button id="refreshBtn">Actualizar</button><button id="shotBtn">Captura del escritorio</button></div>
@@ -173,6 +189,7 @@ button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:poin
 <div id="sheet"><h3 id="sheetTitle"></h3><div id="sheetBody"></div></div>
 <div id="shot"><img id="shotImg" alt="Captura"><button id="shotSave">Guardar en el teléfono</button><button id="shotClose">Cerrar</button></div>
 <div id="autos"><div id="ah"><button class="icon" id="autosBack" aria-label="Volver"><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button><b>Automatizaciones</b><button class="icon" id="autosRefresh" aria-label="Actualizar"><svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.3-5.7M20 4v5h-5"/></svg></button></div><div id="alist"></div></div>
+<div id="cfg"><div id="cfgh"><button class="icon" id="cfgBack" aria-label="Volver"><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button><b>Modelos y cuentas</b><button class="icon" id="cfgRefresh" aria-label="Actualizar"><svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.3-5.7M20 4v5h-5"/></svg></button></div><div id="cbody"></div></div>
 <input type="file" id="pickImg" accept="image/*" multiple hidden><input type="file" id="pickFile" multiple hidden>
 <div id="toast"></div>
 <script>
@@ -387,7 +404,7 @@ async function shot() { toast("Pidiendo captura…", true); try { const r = awai
 $("#shotClose").addEventListener("click", () => $("#shot").classList.remove("on"));
 $("#menuBtn").addEventListener("click", () => drawer(true));
 $("#closeDrawer").addEventListener("click", () => drawer(false));
-window.__back = () => { if ($("#autos").classList.contains("on")) { $("#autos").classList.remove("on"); return true; } if ($("#shot").classList.contains("on")) { $("#shot").classList.remove("on"); return true; } if ($("#sheet").classList.contains("on")) { closeSheet(); return true; } if ($("#drawer").classList.contains("on")) { drawer(false); return true; } return false; };
+window.__back = () => { if ($("#cfg").classList.contains("on")) { $("#cfg").classList.remove("on"); return true; } if ($("#autos").classList.contains("on")) { $("#autos").classList.remove("on"); return true; } if ($("#shot").classList.contains("on")) { $("#shot").classList.remove("on"); return true; } if ($("#sheet").classList.contains("on")) { closeSheet(); return true; } if ($("#drawer").classList.contains("on")) { drawer(false); return true; } return false; };
 
 // ---------------------------------------------------------------- datos
 async function refreshStatus() {
@@ -586,6 +603,7 @@ const CMDS = [
   { n: "modelo", a: ["model"], d: "Elegir modelo y esfuerzo", run: async () => openModels() },
   { n: "nuevo", a: ["new", "clear", "limpiar"], d: "Empezar una conversación nueva", run: async () => newChat(S.wsId || (S.ws[0] && S.ws[0].id)) },
   { n: "lateral", a: ["side"], d: "Pregunta rápida sin guardar conversación", run: async (arg) => { newChat(S.wsId); S.ephemeral = true; toast("Chat lateral: no se guarda en el historial", true); if (arg) { $("#txt").value = arg; autosize(); } } },
+  { n: "ajustes", a: ["config", "settings", "cuentas", "proveedores", "auto"], d: "Modelos, modo AUTO, cuentas, APIs y Master MCP", run: async () => openCfg() },
   { n: "automatizaciones", a: ["automations"], d: "Ver las automatizaciones", run: async () => openAutos() },
   { n: "captura", a: ["screenshot"], d: "Captura del escritorio de la PC", run: async () => shot() },
   { n: "ayuda", a: ["help"], d: "Lista de comandos", run: async () => sysSay("Comandos", CMDS.map((c) => `<div><b>/${c.n}</b>${c.h ? ' <i style="color:var(--muted);font-style:normal">' + esc(c.h) + "</i>" : ""}<br><span style="color:var(--muted);font-size:13px">${esc(c.d)}</span></div>`).join('<div style="height:6px"></div>') + '<div style="margin-top:10px;color:var(--muted);font-size:13px">Solo en la PC: /init, /plan, /fast, /personality, /mention de IDE, /feedback, /logout, /quit, /ps, /stop, /apps, /plugins, /experimental, /debug-config, /rollout, /agent, /statusline, /title, /theme, /copy, /resume, /diff interactivo, ejecución local de comandos con «!».</div>') },
@@ -614,6 +632,119 @@ $("#slashmenu").addEventListener("click", (e) => {
   const b = e.target.closest("[data-c]"); if (!b) return; const c = slashFind(b.dataset.c), t = $("#txt");
   if (c.h) { t.value = "/" + c.n + " "; autosize(); closeSlash(); t.focus(); } else { t.value = "/" + c.n; runSlash(t.value); }
 });
+
+
+// ---------------------------------------------------------------- modelos, modo AUTO, cuentas, proveedores y Master MCP (todo se aplica en la PC)
+const CFG = { st: null, mcp: null, mcpErr: "", busy: false, login: {}, autoDraft: null, open: {} };
+const H = (op, body, extra) => call({ type: "hub", op, ...(body ? { body } : {}), ...(extra || {}) }, 90000);
+const nameOf = (id) => { const c = CFG.st && CFG.st.catalog.find((x) => x.slug === id); return c ? c.name : id; };
+async function loadCfg(quiet) {
+  if (!quiet) { $("#cbody").innerHTML = '<div class="empty"><div class="dots"><i></i><i></i><i></i></div></div>'; }
+  try {
+    CFG.st = await H("state");
+    if (!CFG.autoDraft) CFG.autoDraft = CFG.st.auto.slice();
+  } catch (e) { $("#cbody").innerHTML = `<div class="err-line">${esc(e.message)}</div>`; return; }
+  try { CFG.mcp = await H("mcp-state"); CFG.mcpErr = ""; } catch (e) { CFG.mcp = null; CFG.mcpErr = e.message; }
+  paintCfg();
+}
+const sw = (act, on, extra) => `<button class="sw${on ? " on" : ""}" data-act="${act}" ${extra || ""} aria-label="interruptor"></button>`;
+const dataA = (o) => Object.entries(o).map(([k, v]) => `data-${k}="${esc(String(v))}"`).join(" ");
+function paintCfg() {
+  const st = CFG.st; if (!st || !$("#cfg").classList.contains("on")) return;
+  const y = $("#cbody").scrollTop;
+  const opts = (sel) => st.catalog.map((c) => `<option value="${esc(c.slug)}"${c.slug === sel ? " selected" : ""}>${esc(c.name)}</option>`).join("");
+  let h = "";
+  // --- acciones
+  h += `<div class="csec"><h3>Aplicar en la PC</h3><p class="hint">Los cambios de modelos, proveedores y cuentas se guardan al instante; «Aplicar» regenera la lista de modelos de ChatGPT 2.</p><div class="crow"><button class="cbtn pri" data-act="apply">Aplicar cambios</button><button class="cbtn dng" data-act="restart">Reiniciar la app de la PC</button></div></div>`;
+  // --- modelo por defecto
+  h += `<div class="csec"><h3>Modelo por defecto</h3><select class="cin" id="cDefault">${opts(st.default_model)}</select><div class="crow"><button class="cbtn" data-act="setdefault">Guardar y aplicar</button></div></div>`;
+  // --- AUTO
+  const ad = CFG.autoDraft || [];
+  h += `<div class="csec"><h3>Modo AUTO (respaldo por orden)</h3><p class="hint">Si el primero falla (sin cuota, límite o error) pasa al siguiente. El orden de arriba abajo es el orden de prueba.${st.auto_last && st.auto_last.model ? " Último usado: <b>" + esc(nameOf(st.auto_last.model)) + "</b>." : ""}</p>`;
+  h += ad.length ? ad.map((m, i) => `<div class="crow"><span class="n">${i + 1}. ${esc(nameOf(m))}<small>${esc(m)}</small></span><button class="cbtn" data-act="aup" data-i="${i}" ${i === 0 ? "disabled" : ""}>▲</button><button class="cbtn" data-act="adown" data-i="${i}" ${i === ad.length - 1 ? "disabled" : ""}>▼</button><button class="cbtn dng" data-act="adel" data-i="${i}">✕</button></div>`).join("") : '<div class="hint">Sin modelos: AUTO no hará nada. Añade al menos dos.</div>';
+  h += `<select class="cin" id="cAutoAdd"><option value="">Añadir modelo…</option>${st.models.filter((m) => !ad.includes(m)).map((m) => `<option value="${esc(m)}">${esc(nameOf(m))}</option>`).join("")}</select><div class="crow"><button class="cbtn pri" data-act="asave">Guardar AUTO</button>${JSON.stringify(ad) !== JSON.stringify(st.auto) ? '<span class="tag bad">sin guardar</span>' : ""}</div></div>`;
+  // --- cuentas
+  h += `<div class="csec"><h3>Cuentas (Antigravity, ChatGPT, Claude)</h3><p class="hint">Con varias cuentas el proxy reparte las peticiones (texto e imágenes) y salta a otra cuando una agota su cuota.</p><select class="cin" id="cStrategy"><option value="round-robin"${st.routing === "round-robin" ? " selected" : ""}>Repartir turnos entre cuentas (round-robin)</option><option value="fill-first"${st.routing === "fill-first" ? " selected" : ""}>Usar una hasta que se agote (fill-first)</option></select><div class="crow"><button class="cbtn" data-act="strategy">Guardar estrategia</button></div>`;
+  for (const c of st.credentials) {
+    const cd = (c.cooldowns || []).filter((x) => x.remaining_seconds > 0);
+    h += `<div class="crow"><span class="n">${esc(c.email || c.file)}<span class="tag">${esc(c.type)}</span>${c.disabled ? '<span class="tag bad">apagada</span>' : cd.length ? '<span class="tag bad">sin cuota</span>' : '<span class="tag ok">activa</span>'}<small>última hora: ${c.ok_1h} ok · ${c.fail_1h} fallos · total ${c.ok_total} ok / ${c.fail_total} fallos</small>${cd.map((x) => `<small>${esc(x.model_key)}: vuelve en ${dur(x.remaining_seconds * 1000)}</small>`).join("")}</span>${sw("acct", !c.disabled, dataA({ f: c.file }))}<button class="cbtn dng" data-act="acctdel" ${dataA({ f: c.file })}>✕</button></div>`;
+  }
+  if (!st.credentials.length) h += '<div class="hint">No hay cuentas conectadas.</div>';
+  h += `<div class="crow">${["antigravity", "codex", "claude"].map((k) => `<button class="cbtn" data-act="login" data-k="${k}">+ ${k === "codex" ? "ChatGPT" : k === "claude" ? "Claude" : "Antigravity"}</button>`).join("")}</div>${Object.entries(CFG.login).map(([k, v]) => `<div class="hint">${esc(k)}: ${esc(v)}</div>`).join("")}<div class="hint">Para añadir una cuenta se abre el navegador de la PC: termina el inicio de sesión allí.</div></div>`;
+  // --- proveedores y APIs
+  h += `<div class="csec"><h3>APIs y proveedores</h3><p class="hint">Cualquier servicio compatible con la API de OpenAI (base URL + clave).</p>`;
+  h += st.providers.map((p) => `<div class="crow"><span class="n">${esc(p.name)}<span class="tag">${p.models.length} modelos</span>${p.disabled ? '<span class="tag bad">apagado</span>' : ""}<small>${esc(p.base_url)}</small></span>${sw("provsw", !p.disabled, dataA({ n: p.name }))}<button class="cbtn" data-act="provedit" ${dataA({ n: p.name })}>Editar</button></div>`).join("") || '<div class="hint">Sin proveedores propios.</div>';
+  h += `<div class="crow"><button class="cbtn pri" data-act="provnew">+ Añadir proveedor</button></div>`;
+  const go = st.opencode_go || {};
+  h += `<h3 style="margin-top:12px">OpenCode Go</h3><div class="crow"><span class="n">${go.configured ? "Conectado · clave " + esc(go.key_hint || "") + " · " + (go.models || []).length + " modelos" : "Sin conectar"}</span></div><div class="crow"><button class="cbtn" data-act="gokey">${go.configured ? "Cambiar clave" : "Poner clave"}</button>${go.configured ? '<button class="cbtn" data-act="gorefresh">Actualizar modelos</button><button class="cbtn dng" data-act="godel">Quitar</button>' : ""}</div></div>`;
+  // --- Master MCP
+  const mm = CFG.mcp, running = mm && mm.masterMcp && mm.masterMcp.running, ctl = (mm && mm.control) || {};
+  h += `<div class="csec"><h3>Master MCP</h3>`;
+  if (!mm) h += `<div class="hint">${esc(CFG.mcpErr || "No disponible")}</div>`;
+  else {
+    h += `<div class="crow"><span class="n">${running ? (mm.masterMcp.publicUrl ? "Conector público activo" : "Gateway local activo") : "Detenido"}<small>${esc(mm.masterMcp.publicUrl ? mm.masterMcp.publicUrl + "/mcp" : mm.masterMcp.localUrl || "")}</small></span>${sw("mcpsw", running)}</div>`;
+    h += `<label class="hint">Método</label><select class="cin" id="cMcpMode"><option value="local"${ctl.mode !== "ngrok" ? " selected" : ""}>Solo local</option><option value="ngrok"${ctl.mode === "ngrok" ? " selected" : ""}>ngrok (URL pública para ChatGPT web)</option></select><input class="cin" id="cMcpDomain" placeholder="Dominio reservado de ngrok (opcional)" value="${esc(ctl.domain || "")}" autocomplete="off"><input class="cin" id="cMcpToken" type="password" placeholder="${mm.tunnel && mm.tunnel.configured ? "authtoken de ngrok guardado (vacío = conservar)" : "authtoken de ngrok"}" autocomplete="off"><div class="crow"><button class="cbtn" data-act="mcptest">Probar conexión</button><span class="hint" style="margin:0">Las autorizaciones de conectores se aprueban en la PC.</span></div>`;
+  }
+  h += `</div>`;
+  // --- catálogo
+  h += `<div class="csec"><h3>Modelos disponibles (${st.models.length})</h3><details><summary class="hint">Ver lista</summary>${st.models.map((m) => `<div class="crow"><span class="n">${esc(nameOf(m))}<small>${esc(m)}</small></span></div>`).join("")}</details></div>`;
+  $("#cbody").innerHTML = h; $("#cbody").scrollTop = y;
+}
+async function cfgDo(fn, okText) { if (CFG.busy) return; CFG.busy = true; try { const r = await fn(); if (okText) toast(okText, true); await loadCfg(true); return r; } catch (e) { toast(e.message); } finally { CFG.busy = false; } }
+const val = (id) => ($(id) ? $(id).value : "");
+function provForm(p) {
+  const models = (p ? p.models : []).map((m) => [m.name, m.alias !== m.name ? m.alias : "", m.display || ""].join(" | ")).join("\n");
+  sheet(p ? "Editar proveedor" : "Nuevo proveedor", `<input class="cin" id="pName" placeholder="Nombre" value="${esc(p ? p.name : "")}"><input class="cin" id="pBase" placeholder="Base URL (https://…/v1)" value="${esc(p ? p.base_url : "")}" autocomplete="off"><input class="cin" id="pKey" type="password" placeholder="${p ? "Clave API (vacío = conservar)" : "Clave API"}" autocomplete="off"><textarea class="cin" id="pModels" placeholder="Un modelo por línea:&#10;nombre | alias | nombre visible">${esc(models)}</textarea><div class="crow"><button class="cbtn pri" data-act="provsave" ${p ? dataA({ o: p.name }) : ""}>Guardar</button>${p ? `<button class="cbtn dng" data-act="provdel" ${dataA({ o: p.name })}>Eliminar</button>` : ""}</div>`);
+}
+// La clave API no se reenvía (el hub solo la recibe enmascarada): sin «api_key» conserva la que ya tiene.
+function provList() {
+  return CFG.st.providers.map(({ api_key, ...p }) => ({ ...p, orig_name: p.name }));
+}
+document.addEventListener("click", async (e) => {
+  const b = e.target.closest("[data-act]"); if (!b || !$("#cfg").classList.contains("on") && !$("#sheet").classList.contains("on")) return;
+  const a = b.dataset.act, st = CFG.st; if (!st) return;
+  const need = ["apply", "restart", "setdefault", "aup", "adown", "adel", "asave", "strategy", "acct", "acctdel", "login", "provsw", "provedit", "provnew", "provsave", "provdel", "gokey", "gorefresh", "godel", "mcpsw", "mcptest"];
+  if (!need.includes(a)) return;
+  const d = b.dataset, ad = CFG.autoDraft;
+  if (a === "apply") return cfgDo(async () => { const r = await H("apply"); return r; }, "Aplicado en la PC");
+  if (a === "restart") return sheet("¿Reiniciar la app de la PC?", '<div class="hint" style="padding:6px 14px">Se cerrará y volverá a abrir. Se cortan las tareas en curso.</div><button class="opt" data-act="restart2">Sí, reiniciar</button>');
+  if (a === "setdefault") return cfgDo(async () => { await H("default", { slug: val("#cDefault") }); await H("apply"); }, "Modelo por defecto guardado");
+  if (a === "aup" || a === "adown") { const i = +d.i, j = a === "aup" ? i - 1 : i + 1; [ad[i], ad[j]] = [ad[j], ad[i]]; return paintCfg(); }
+  if (a === "adel") { ad.splice(+d.i, 1); return paintCfg(); }
+  if (a === "asave") { const add = val("#cAutoAdd"); if (add && !ad.includes(add)) ad.push(add); return cfgDo(() => H("auto", { models: ad }), "AUTO guardado"); }
+  if (a === "strategy") return cfgDo(() => H("routing", { strategy: val("#cStrategy") }), "Estrategia guardada");
+  if (a === "acct") return cfgDo(() => H("account-status", { name: d.f, disabled: b.classList.contains("on") }), "Cuenta actualizada");
+  if (a === "acctdel") return sheet("¿Quitar esta cuenta?", `<div class="hint" style="padding:6px 14px">${esc(d.f)}</div><button class="opt" data-act="acctdel2" ${dataA({ f: d.f })}>Sí, quitar</button>`);
+  if (a === "login") { CFG.login[d.k] = "iniciando…"; paintCfg(); try { await H("login-start", null, { kind: d.k }); } catch (x) { CFG.login[d.k] = x.message; return paintCfg(); } for (let i = 0; i < 90; i++) { await new Promise((r) => setTimeout(r, 2000)); const r = await H("login-status", null, { kind: d.k }).catch(() => ({ state: "?" })); if (r.state === "ok") { delete CFG.login[d.k]; toast("Cuenta conectada", true); return loadCfg(true); } if (r.state === "failed") { CFG.login[d.k] = "falló: " + (r.tail || "").slice(-120); return paintCfg(); } CFG.login[d.k] = "esperando el inicio de sesión en la PC…"; paintCfg(); } delete CFG.login[d.k]; return paintCfg(); }
+  if (a === "provsw") { const list = provList(); const p = list.find((x) => x.name === d.n); p.disabled = b.classList.contains("on"); return cfgDo(() => H("providers", { providers: list }), "Proveedor actualizado"); }
+  if (a === "provedit") return provForm(st.providers.find((x) => x.name === d.n));
+  if (a === "provnew") return provForm(null);
+  if (a === "provsave") {
+    const name = val("#pName").trim(), base = val("#pBase").trim(), models = val("#pModels").split("\n").map((l) => l.split("|").map((x) => x.trim())).filter((x) => x[0]).map((x) => ({ name: x[0], alias: x[1] || x[0], display: x[2] || "" }));
+    if (!name || !/^https?:\/\//.test(base)) return toast("Pon un nombre y una base URL válida (https://…)");
+    const list = provList().filter((x) => x.orig_name !== d.o); const old = st.providers.find((x) => x.name === d.o);
+    const prev = old ? Object.fromEntries(old.models.map((m) => [m.name, m])) : {};
+    list.push({ name, orig_name: d.o || name, base_url: base, api_key: val("#pKey") || undefined, disabled: old ? old.disabled : false, models: models.map((m) => ({ ...(prev[m.name] || {}), ...m })) });
+    closeSheet(); return cfgDo(() => H("providers", { providers: list }).then(() => H("apply")), "Proveedor guardado y aplicado");
+  }
+  if (a === "provdel") { const o = d.o; closeSheet(); return cfgDo(() => H("providers", { providers: provList().filter((x) => x.orig_name !== o) }).then(() => H("apply")), "Proveedor eliminado"); }
+  if (a === "gokey") return sheet("Clave de OpenCode Go", '<input class="cin" id="goKey" type="password" placeholder="Clave API" autocomplete="off"><div class="crow"><button class="cbtn pri" data-act="gokey2">Guardar y traer modelos</button></div>');
+  if (a === "gorefresh") return cfgDo(() => H("go-refresh").then(() => H("apply")), "Modelos de OpenCode Go actualizados");
+  if (a === "godel") return cfgDo(() => H("go-delete").then(() => H("apply")), "OpenCode Go quitado");
+  if (a === "mcpsw") { const on = !b.classList.contains("on"), mode = val("#cMcpMode") || "local", tok = val("#cMcpToken"); return cfgDo(() => H("mcp-settings", { enabled: on, mode, domain: val("#cMcpDomain").trim(), ...(tok ? { ngrokToken: tok } : {}) }), on ? "Master MCP encendido" : "Master MCP apagado"); }
+  if (a === "mcptest") { try { const r = await H("mcp-test"); toast([r.local && r.local.detail, r.remote && r.remote.detail].filter(Boolean).join(" · ") || "Listo", true); } catch (x) { toast(x.message); } }
+});
+// confirmaciones de las hojas (el segundo botón lleva «2» al final)
+document.addEventListener("click", async (e) => {
+  const b = e.target.closest("[data-act]"); if (!b) return; const a = b.dataset.act;
+  if (a === "restart2") { closeSheet(); cfgDo(() => H("restart"), "Reiniciando la app de la PC…"); }
+  else if (a === "acctdel2") { closeSheet(); cfgDo(() => H("account-delete", null, { file: b.dataset.f }), "Cuenta quitada"); }
+  else if (a === "gokey2") { const k = val("#goKey").trim(); if (!k) return toast("Pega la clave"); closeSheet(); cfgDo(() => H("go-key", { api_key: k }).then(() => H("go-refresh")).then(() => H("apply")), "OpenCode Go conectado"); }
+});
+function openCfg() { drawer(false); $("#cfg").classList.add("on"); CFG.autoDraft = null; loadCfg(false); }
+$("#cfgBtn").addEventListener("click", openCfg);
+$("#cfgBack").addEventListener("click", () => $("#cfg").classList.remove("on"));
+$("#cfgRefresh").addEventListener("click", () => { CFG.autoDraft = null; toast("Actualizando…", true); loadCfg(true); });
 
 // ---------------------------------------------------------------- automatizaciones
 const AU = { list: [], skew: 0 };
