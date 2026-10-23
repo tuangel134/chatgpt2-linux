@@ -27,6 +27,18 @@ class Fake(BaseHTTPRequestHandler):
         body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
         seen.append((body.get("model"), body))
         kind = behavior.get(body.get("model"), ("json",))
+        if body.get("bad") == 1:
+            out = b'{"error":{"message":"otro error 400"}}'
+            self.send_response(400)
+            self.send_header("Content-Length", str(len(out)))
+            self.end_headers(); self.wfile.write(out)
+            return
+        if any(isinstance(x, dict) and x.get("type") == "compaction" for x in (body.get("input") or [])):
+            out = b'{"error":{"message":"invalid compaction capsule: unrecognized compaction capsule format"}}'
+            self.send_response(400)
+            self.send_header("Content-Length", str(len(out)))
+            self.end_headers(); self.wfile.write(out)
+            return
         if kind[0] == "status":
             out = b'{"error":"x"}'
             self.send_response(kind[1])
@@ -109,6 +121,24 @@ class AutoRouter(unittest.TestCase):
         st, out = post({"model": "b", "input": [{"type": "reasoning"}]})
         self.assertEqual((st, json.loads(out)["model"]), (200, "b"))
         self.assertEqual(seen[0][1]["input"], [{"type": "reasoning"}])
+
+    def test_capsula_de_compactacion_ilegible_se_descarta(self):
+        hist = [{"type": "message", "role": "user", "content": []}, {"type": "compaction", "encrypted_content": "zzz"}]
+        st, out = post({"model": "b", "input": hist})            # modelo normal (sin AUTO)
+        self.assertEqual((st, json.loads(out)["model"]), (200, "b"))
+        self.assertEqual(len(seen), 2)                           # 1.º rechazado, 2.º reintento
+        retry = seen[1][1]["input"]
+        self.assertFalse(any(x.get("type") == "compaction" for x in retry))
+        self.assertIn("ChatGPT 2", json.dumps(retry))            # deja un aviso de contexto perdido
+        seen.clear()
+        st, out = post({"model": "auto", "input": hist})         # y también dentro de AUTO
+        self.assertEqual((st, json.loads(out)["model"]), (200, "a"))
+
+    def test_otro_400_se_devuelve_tal_cual(self):
+        st, out = post({"model": "b", "bad": 1, "input": [{"type": "compaction"}]})
+        self.assertEqual(st, 400)
+        self.assertIn("otro error 400", out.decode())
+        self.assertEqual(len(seen), 1)
 
     def test_rechaza_origen_web(self):
         st, _ = post({"model": "auto"}, headers={"Origin": "https://evil.example"})

@@ -267,7 +267,7 @@ def auto_entry(st, catalog):
     return entry
 
 
-def patch_toml(first_model, use_router=False):
+def patch_toml(first_model, use_router=True):
     s = CODEX_TOML.read_text() if CODEX_TOML.exists() else ""
     if s.startswith("["):
         s = "\n" + s
@@ -322,7 +322,7 @@ def apply_all(restart_cpa=True):
         restart_proxy()
     cat = build_catalog(st)
     CATALOG.write_text(json.dumps({"models": cat}, indent=2, ensure_ascii=False))
-    patch_toml(cat[0]["slug"] if cat else None, use_router=any(m["slug"] == "auto" for m in cat))
+    patch_toml(cat[0]["slug"] if cat else None, use_router=True)
     ensure_mcp()
     return len(cat)
 
@@ -399,6 +399,50 @@ def auto_chain():
     return sorted(pool, key=lambda m: cooldown.get(m, 0))  # todos enfriándose: reintenta el que antes se libera
 
 
+COMPACTION_TYPES = {"compaction", "compaction_summary"}
+LOST_CONTEXT = ("[Aviso de ChatGPT 2: un resumen anterior de esta conversación venía cifrado por otro proveedor y no se pudo "
+                "recuperar; se descartó. Si hace falta, pide al usuario que repita el contexto importante.]")
+
+
+def has_compaction(d):
+    return isinstance(d.get("input"), list) and any(isinstance(x, dict) and x.get("type") in COMPACTION_TYPES for x in d["input"])
+
+
+def strip_compaction(d):
+    """Sustituye las cápsulas de compactación ilegibles por un aviso de texto (mejor que fallar la petición)."""
+    out, noted = [], False
+    for x in d["input"]:
+        if isinstance(x, dict) and x.get("type") in COMPACTION_TYPES:
+            if not noted:
+                out.append({"type": "message", "role": "user", "content": [{"type": "input_text", "text": LOST_CONTEXT}]})
+                noted = True
+            continue
+        out.append(x)
+    d["input"] = out
+    return d
+
+
+class Buffered:
+    """Respuesta ya leída (se usa cuando hubo que mirar el cuerpo de un 400 antes de decidir)."""
+    def __init__(self, status, body, headers):
+        self.status, self._body, self._h, self._sent = status, body, headers, False
+
+    def getheaders(self):
+        return [(k, v) for k, v in self._h if k.lower() != "content-length"] + [("Content-Length", str(len(self._body)))]
+
+    def getheader(self, name, default=None):
+        return next((v for k, v in self._h if k.lower() == name.lower()), default)
+
+    def read(self, *a):
+        return b""
+
+    def read1(self, *a):
+        if self._sent:
+            return b""
+        self._sent = True
+        return self._body
+
+
 class Router(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.0"  # respuesta delimitada por cierre: sirve para streaming SSE
 
@@ -427,7 +471,9 @@ class Router(BaseHTTPRequestHandler):
                 data = json.loads(body)
             except ValueError:
                 data = None
-            if isinstance(data, dict) and data.get("model") == "auto":
+            if not isinstance(data, dict):
+                data = None
+            if data and data.get("model") == "auto":
                 chain = auto_chain()
                 if not chain:
                     return self._fail(503, "AUTO no tiene modelos disponibles: elige modelos en Ajustes → Modelos personalizados.")
@@ -444,6 +490,20 @@ class Router(BaseHTTPRequestHandler):
                 conn = http.client.HTTPConnection("127.0.0.1", CPA_PORT, timeout=900)
                 conn.request(self.command, self.path, payload, {**base, "Content-Length": str(len(payload))})
                 resp = conn.getresponse()
+                if resp.status == 400 and data and has_compaction(data):
+                    err = resp.read(); conn.close()
+                    if b"compaction capsule" in err:  # resumen de otro proveedor/versión que el proxy no reconoce
+                        d = strip_compaction(dict(data))
+                        if model:
+                            d["model"] = model
+                            if isinstance(d.get("input"), list):
+                                d["input"] = [x for x in d["input"] if not (isinstance(x, dict) and x.get("type") == "reasoning")]
+                        payload = json.dumps(d).encode()
+                        conn = http.client.HTTPConnection("127.0.0.1", CPA_PORT, timeout=900)
+                        conn.request(self.command, self.path, payload, {**base, "Content-Length": str(len(payload))})
+                        resp = conn.getresponse()
+                    else:
+                        resp = Buffered(400, err, resp.getheaders())
             except Exception as e:
                 if model and i < len(chain) - 1:
                     cool(model); skipped.append(model + " (sin conexión)")

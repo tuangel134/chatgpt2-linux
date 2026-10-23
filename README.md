@@ -208,7 +208,7 @@ Debajo de la lista ves cuál fue el último modelo usado y cuáles se saltó (po
 - Cambia de modelo con estos fallos: sin cuota o límite (429), sin acceso o sesión caducada (401, 402, 403), modelo no encontrado (404), tiempo agotado (408), errores del servidor (5xx) y sin conexión.
 - Un modelo que falla se **salta durante unos minutos** (5 minutos por defecto, 10 si el modelo no existe, 1 para errores de servidor; si el servicio manda `Retry-After`, se respeta) y se vuelve a probar después, así que el primero de tu lista recupera su puesto.
 - Si todos fallan, devuelve el error del último.
-- Si dejas la lista vacía, AUTO desaparece del selector y Codex vuelve a hablar directo con el proxy.
+- Si dejas la lista vacía, AUTO desaparece del selector (el enrutador sigue activo para el resto de modelos).
 
 **Límites (importante):**
 
@@ -303,6 +303,9 @@ Los puertos son fijos. Cierra lo que los use o la otra instancia de ChatGPT 2: `
 
 **El inicio de sesión de Antigravity/Claude no abre el navegador.**
 Mira el registro: `/tmp/modelhub-login-antigravity.log` (aparece la URL de inicio de sesión; ábrela a mano).
+
+**«invalid compaction capsule: unrecognized compaction capsule format».**
+Una conversación antigua trae un resumen (compactación) cifrado por otro proveedor o versión, y el proxy no sabe leerlo. El enrutador local lo detecta, descarta esa cápsula y reintenta la petición con un aviso de que se perdió ese resumen; no hace falta hacer nada. Si ves el error, comprueba que ChatGPT 2 se reinició tras actualizar (`base_url` del hub en `~/.codex-2/config.toml` debe ser `http://127.0.0.1:8320/v1`).
 
 **Los modelos no aparecen tras conectar la cuenta.**
 Pulsa *Guardar y aplicar* y luego *Reiniciar ChatGPT 2*. Registro del proxy: `~/.codex-2/cliproxyapi.log`.
