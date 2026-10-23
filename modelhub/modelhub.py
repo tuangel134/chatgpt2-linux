@@ -5,6 +5,7 @@ Escucha solo en 127.0.0.1:8318 y exige el token de ~/.codex-2/hub-token.
 Escribe la configuración de CLIProxyAPI (proveedores openai-compatibility),
 regenera el catálogo de modelos de Codex y lanza los inicios de sesión OAuth.
 """
+import http.client
 import json
 import os
 import pathlib
@@ -32,6 +33,7 @@ CATALOG = CODEX_HOME / "hub-models.json"
 CODEX_TOML = CODEX_HOME / "config.toml"
 PORT = 8318
 CPA_PORT = 8317
+ROUTER_PORT = 8320  # enrutador del modo AUTO (solo escucha en 127.0.0.1)
 CPA_PID = CODEX_HOME / "cliproxyapi.pid"
 LOGIN_FLAGS = {"codex": "-codex-login", "claude": "-claude-login", "antigravity": "-antigravity-login"}
 SUFFIX = {"antigravity": "Antigravity", "openai": "ChatGPT", "codex": "ChatGPT", "anthropic": "Claude", "claude": "Claude"}
@@ -64,7 +66,7 @@ def cpa_key():
 def load_state():
     if STATE.exists():
         return json.loads(STATE.read_text())
-    return {"providers": []}
+    return {"providers": [], "auto": {"models": []}}
 
 
 def save_state(st):
@@ -224,16 +226,54 @@ def build_catalog(st):
             "input_modalities": ["text", "image"] if image else ["text"], "supports_search_tool": False,
             "use_responses_lite": False,
         })
+    auto = auto_entry(st, out)
+    if auto:
+        out.insert(0, auto)
+        for i, m in enumerate(out):
+            m["priority"] = i
     return out
 
 
-def patch_toml(first_model):
+def auto_pool(st, catalog=None):
+    """Modelos de AUTO que siguen disponibles, en el orden elegido por el usuario."""
+    wanted = [m for m in (st.get("auto") or {}).get("models", []) if isinstance(m, str) and m != "auto"]
+    if catalog is not None:
+        have = {m["slug"] for m in catalog}
+    else:
+        try:
+            have = {m["id"] for m in cpa_models()}
+        except Exception:
+            have = set(wanted)
+    return [m for m in wanted if m in have]
+
+
+def auto_entry(st, catalog):
+    pool = auto_pool(st, catalog)
+    if not pool:
+        return None
+    by = {m["slug"]: m for m in catalog}
+    members = [by[m] for m in pool]
+    entry = json.loads(json.dumps(members[0]))  # parte del primero de la lista
+    ctx = min(m["context_window"] for m in members)
+    image = all("image" in m["input_modalities"] for m in members)
+    names = ", ".join(m["display_name"] for m in members)
+    entry.update({
+        "slug": "auto", "display_name": "AUTO",
+        "description": "Cambia solo de modelo: usa el primero de tu lista y, si falla o se queda sin cuota, pasa al siguiente. Orden: " + names,
+        "supported_reasoning_levels": LEVELS_BASE, "default_reasoning_level": "medium",
+        "context_window": ctx, "max_context_window": ctx,
+        "input_modalities": ["text", "image"] if image else ["text"],
+    })
+    return entry
+
+
+def patch_toml(first_model, use_router=False):
     s = CODEX_TOML.read_text() if CODEX_TOML.exists() else ""
     if s.startswith("["):
         s = "\n" + s
     key = cpa_key()
     block = (
-        f'[model_providers.hub]\nname = "Hub local (CLIProxyAPI)"\nbase_url = "http://127.0.0.1:{CPA_PORT}/v1"\n'
+        f'[model_providers.hub]\nname = "Hub local (CLIProxyAPI)"\nbase_url = "http://127.0.0.1:{ROUTER_PORT if use_router else CPA_PORT}/v1"\n'
         f'wire_api = "responses"\nexperimental_bearer_token = "{key}"\n'
     )
     # quitar el proveedor antiguo y el bloque hub previo
@@ -282,7 +322,7 @@ def apply_all(restart_cpa=True):
         restart_proxy()
     cat = build_catalog(st)
     CATALOG.write_text(json.dumps({"models": cat}, indent=2, ensure_ascii=False))
-    patch_toml(cat[0]["slug"] if cat else None)
+    patch_toml(cat[0]["slug"] if cat else None, use_router=any(m["slug"] == "auto" for m in cat))
     ensure_mcp()
     return len(cat)
 
@@ -324,6 +364,125 @@ def login_status(kind):
 def restart_clone():
     script = ROOT / "modelhub/restart-clone.sh"
     subprocess.Popen(["sh", str(script)], start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+# ------------------------------------------------------------------ modo AUTO (respaldo por orden)
+# Enrutador local: Codex habla con él (en vez de con el proxy) cuando existe el modelo «auto». Reenvía todo tal cual
+# al proxy; si la petición pide model=="auto", prueba los modelos elegidos por orden y pasa al siguiente cuando uno
+# falla ANTES de empezar a responder (sin cuota, límite, error del servidor, modelo no encontrado, sin conexión).
+FAILOVER_STATUS = {401, 402, 403, 404, 408, 429}  # 401: sesión caducada o proveedor sin acceso para ese modelo
+HOP = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailers", "transfer-encoding", "upgrade"}
+cooldown = {}   # modelo -> instante hasta el que se salta
+auto_last = {"model": "", "at": 0, "skipped": []}
+
+
+def cool(model, status=None, retry_after=None):
+    secs = 60
+    if status in (429, 403, 402, 401):
+        secs = 300
+    elif status == 404:
+        secs = 600
+    try:
+        if retry_after:
+            secs = max(10, min(3600, int(float(retry_after))))
+    except ValueError:
+        pass
+    cooldown[model] = time.time() + secs
+
+
+def auto_chain():
+    pool = auto_pool(load_state())
+    now = time.time()
+    ready = [m for m in pool if cooldown.get(m, 0) <= now]
+    if ready:
+        return ready
+    return sorted(pool, key=lambda m: cooldown.get(m, 0))  # todos enfriándose: reintenta el que antes se libera
+
+
+class Router(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.0"  # respuesta delimitada por cierre: sirve para streaming SSE
+
+    def log_message(self, *a):
+        pass
+
+    def _fail(self, code, text):
+        body = json.dumps({"error": {"message": text, "type": "auto_router_error"}}).encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _handle(self):
+        host = (self.headers.get("Host") or "").split(":")[0]
+        if self.headers.get("Origin") or host not in ("127.0.0.1", "localhost"):
+            return self._fail(403, "forbidden")  # nada de páginas web ni DNS rebinding
+        n = int(self.headers.get("Content-Length") or 0)
+        body = self.rfile.read(n) if n else b""
+        base = {k: v for k, v in self.headers.items() if k.lower() not in HOP | {"host", "content-length"}}
+        data, chain = None, [None]
+        if self.command == "POST" and body and "content-encoding" not in {k.lower() for k in base} \
+                and self.path.split("?")[0].endswith(("/responses", "/chat/completions")):
+            try:
+                data = json.loads(body)
+            except ValueError:
+                data = None
+            if isinstance(data, dict) and data.get("model") == "auto":
+                chain = auto_chain()
+                if not chain:
+                    return self._fail(503, "AUTO no tiene modelos disponibles: elige modelos en Ajustes → Modelos personalizados.")
+        skipped = []
+        for i, model in enumerate(chain):
+            payload = body
+            if model:
+                d = dict(data)
+                d["model"] = model
+                if isinstance(d.get("input"), list):  # el razonamiento cifrado de un modelo no vale para otro
+                    d["input"] = [x for x in d["input"] if not (isinstance(x, dict) and x.get("type") == "reasoning")]
+                payload = json.dumps(d).encode()
+            try:
+                conn = http.client.HTTPConnection("127.0.0.1", CPA_PORT, timeout=900)
+                conn.request(self.command, self.path, payload, {**base, "Content-Length": str(len(payload))})
+                resp = conn.getresponse()
+            except Exception as e:
+                if model and i < len(chain) - 1:
+                    cool(model); skipped.append(model + " (sin conexión)")
+                    continue
+                return self._fail(502, "No se pudo contactar con el proxy: %s" % e)
+            if model and resp.status in FAILOVER_STATUS | set(range(500, 600)) and i < len(chain) - 1:
+                resp.read(); conn.close()
+                cool(model, resp.status, resp.getheader("Retry-After")); skipped.append("%s (HTTP %d)" % (model, resp.status))
+                continue
+            if model:
+                auto_last.update({"model": model, "at": int(time.time()), "skipped": skipped})
+            self.send_response(resp.status)
+            for k, v in resp.getheaders():
+                if k.lower() not in HOP:
+                    self.send_header(k, v)
+            self.end_headers()
+            try:
+                while True:
+                    chunk = resp.read1(65536)
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+                    self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+            finally:
+                conn.close()
+            return
+
+    do_GET = do_POST = do_PUT = do_DELETE = do_PATCH = _handle
+
+
+def start_router():
+    try:
+        srv = ThreadingHTTPServer(("127.0.0.1", ROUTER_PORT), Router)
+        srv.daemon_threads = True
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+    except OSError as e:
+        print("enrutador AUTO no iniciado:", e, file=sys.stderr)
 
 
 def mask(p):
@@ -385,7 +544,8 @@ class H(BaseHTTPRequestHandler):
                     models = [m["id"] for m in cpa_models()]
                 except Exception:
                     models = []
-                self._send(200, {"providers": [mask(p) for p in st["providers"]], "accounts": accounts(), "models": models})
+                self._send(200, {"providers": [mask(p) for p in st["providers"]], "accounts": accounts(), "models": models,
+                                 "auto": (st.get("auto") or {}).get("models", []), "auto_last": auto_last})
             elif self.path.startswith("/login/"):
                 self._send(200, login_status(self.path.split("/")[2]))
             else:
@@ -415,7 +575,16 @@ class H(BaseHTTPRequestHandler):
                                            "display": (m.get("display") or "").strip(),
                                            "context": int(m.get("context") or 0) or None, "image": bool(m.get("image"))})
                     clean.append({"name": name, "base_url": base, "api_key": key, "models": models, "disabled": bool(p.get("disabled"))})
-                save_state({"providers": clean})
+                save_state({**load_state(), "providers": clean})
+                self._send(200, {"ok": True})
+            elif self.path == "/auto":
+                models = [str(m) for m in self._body().get("models", []) if str(m).strip() and str(m) != "auto"]
+                seen = []
+                for m in models:
+                    if m not in seen:
+                        seen.append(m)
+                cooldown.clear()
+                save_state({**load_state(), "auto": {"models": seen}})
                 self._send(200, {"ok": True})
             else:
                 self._send(404)
@@ -467,4 +636,5 @@ if __name__ == "__main__":
         write_cpa_config(load_state())
         print("hub inicializado")
         sys.exit(0)
+    start_router()
     ThreadingHTTPServer(("127.0.0.1", PORT), H).serve_forever()

@@ -19,6 +19,7 @@ Conecta Antigravity (Gemini), Claude, ChatGPT o cualquier API compatible con Ope
 4. [Instalación](#instalación)
 5. [Primer inicio (inicio de sesión)](#primer-inicio-inicio-de-sesión)
 6. [Tutorial: conectar tus modelos](#tutorial-conectar-tus-modelos)
+   - [Modo AUTO](#modo-auto-cambia-de-modelo-solo)
 7. [Modo «ChatGPT Web»](#modo-chatgpt-web)
 8. [Master MCP](#master-mcp)
 9. [Generación de imágenes](#generación-de-imágenes)
@@ -59,13 +60,14 @@ Todo corre en tu máquina. Tu ChatGPT/Codex de siempre **no se toca**: la copia 
 | **`patch_ui.py`** | Extrae el `app.asar` original, le añade las pantallas y parches de abajo y lo vuelve a empaquetar. Parte siempre del original, así que se puede repetir sin acumular cambios. | `modelhub/patch_ui.py` |
 | **ModelHub** (`:8318`) | Servicio local. Guarda tus proveedores y cuentas, escribe la configuración del proxy, genera el catálogo de modelos de Codex y lanza los inicios de sesión OAuth. Exige un token y rechaza orígenes ajenos. | `modelhub/modelhub.py` |
 | **CLIProxyAPI** (`:8317`) | Proxy de código abierto ([router-for-me/CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI)). Habla con Antigravity, Claude y ChatGPT mediante OAuth y expone todo como una API compatible con OpenAI. | `cliproxyapi/cli-proxy-api` |
+| **Enrutador AUTO** (`:8320`) | Vive dentro de ModelHub. Cuando eliges modelos para AUTO, Codex habla con él en vez de con el proxy: reenvía todo tal cual y, si la petición es para `auto`, prueba tus modelos por orden y pasa al siguiente cuando uno falla. | `modelhub/modelhub.py` |
 | **Pantalla «Modelos personalizados»** | La interfaz de Ajustes para conectar cuentas, añadir proveedores y aplicar cambios. | `modelhub/custom-models-settings.js` |
 | **Pestaña «ChatGPT Web»** (`:8322`) | Una vista nativa de chatgpt.com dentro de la ventana, con sesión persistente propia, mismo color que la app y un menú de modos que se abre por encima de la web. **No automatiza ni lee la página.** | `modelhub/chatgpt_web_view.js` y `chatgpt_web_overlay.js` |
 | **Master MCP** (`:8319`) | Servidor MCP local con herramientas de carpetas y navegador, protegido con OAuth. Apagado por defecto. | `mastermcp/` |
 | **`gemini_media_mcp.py`** | Servidor MCP que da `generate_image` a cualquier modelo usando las cuentas de Antigravity. | `modelhub/gemini_media_mcp.py` |
 | **Lanzador `chatgpt2`** | Levanta lo que falte (proxy, hub, Master MCP) y abre la app con su propio perfil. | `bin/chatgpt2` |
 
-Los puertos escuchan **solo en `127.0.0.1`**.
+Los puertos (8317, 8318, 8319, 8320 y 8322) escuchan **solo en `127.0.0.1`**.
 
 ---
 
@@ -189,6 +191,32 @@ Sirve para cualquier servicio compatible con la API de OpenAI (OpenRouter, un se
 
 En la misma pantalla: **Quitar** junto a la cuenta, o **Quitar proveedor** en el proveedor, y luego **Guardar y aplicar**.
 
+### Modo AUTO: cambia de modelo solo
+
+AUTO es un modelo más en el selector de Codex (aparece el primero de la lista). Tú eliges **qué modelos entran y en qué orden**; AUTO usa el primero y, **si falla o se queda sin cuota o límite, pasa solo al siguiente**.
+
+1. Abre **Ajustes → Modelos personalizados** y baja hasta **AUTO · cambia de modelo solo**.
+2. Pulsa **+ Añadir modelo a AUTO…** y elige un modelo. Repite con los que quieras.
+3. Ordénalos con **▲ ▼** (el 1 es el preferido) y quita con **✕**.
+4. **Guardar y aplicar** y luego **Reiniciar ChatGPT 2**.
+5. En el selector de modelos de Codex elige **AUTO**.
+
+Debajo de la lista ves cuál fue el último modelo usado y cuáles se saltó (por ejemplo: *«saltó: nemotron-3.5-lightning-free (HTTP 401)»*).
+
+**Cómo decide:**
+
+- Cambia de modelo con estos fallos: sin cuota o límite (429), sin acceso o sesión caducada (401, 402, 403), modelo no encontrado (404), tiempo agotado (408), errores del servidor (5xx) y sin conexión.
+- Un modelo que falla se **salta durante unos minutos** (5 minutos por defecto, 10 si el modelo no existe, 1 para errores de servidor; si el servicio manda `Retry-After`, se respeta) y se vuelve a probar después, así que el primero de tu lista recupera su puesto.
+- Si todos fallan, devuelve el error del último.
+- Si dejas la lista vacía, AUTO desaparece del selector y Codex vuelve a hablar directo con el proxy.
+
+**Límites (importante):**
+
+- Solo cambia **antes** de que el modelo empiece a responder. Si un modelo falla a mitad de una respuesta, esa respuesta falla; no se retoma con otro.
+- Al cambiar de modelo se **descarta el razonamiento cifrado** de los turnos anteriores, porque no vale para otro modelo. El resto de la conversación sí se conserva.
+- El contexto de AUTO es el del modelo más pequeño de tu lista, y acepta imágenes solo si todos los modelos las aceptan.
+- Los niveles de razonamiento de AUTO son los comunes: bajo, medio y alto.
+
 ---
 
 ## Modo «ChatGPT Web»
@@ -270,7 +298,7 @@ El instalador lo comprueba con `ldd` y lista lo que falte. Instálalo con tu ges
 **«Los parches NO encajaron».**
 Estás usando una versión de la app distinta a la probada. Vuelve a ejecutar sin `--version`.
 
-**Un puerto está ocupado (8317, 8318, 8319 o 8322).**
+**Un puerto está ocupado (8317, 8318, 8319, 8320 o 8322).**
 Los puertos son fijos. Cierra lo que los use o la otra instancia de ChatGPT 2: `pkill -f 'user-data-dir=.*Codex-2'`.
 
 **El inicio de sesión de Antigravity/Claude no abre el navegador.**
@@ -312,6 +340,7 @@ chatgpt2-linux/
 │   ├── chatgpt_web_view.js         proceso principal: vista de chatgpt.com (:8322)
 │   ├── chatgpt_web_overlay.js      interfaz: posición, cubierta y menú sobre la web
 │   ├── gemini_media_mcp.py         herramienta generate_image
+│   ├── tests/test_auto_router.py   pruebas del enrutador AUTO (proxy falso, sin cuentas)
 │   └── restart-clone.sh            botón «Reiniciar» de Ajustes
 ├── mastermcp/              Master MCP (host.cjs compilado + fuentes TypeScript + pruebas)
 └── docs/img/               capturas

@@ -57,7 +57,7 @@ const S = {
 
 function mount(root) {
   if (!root) return;
-  let state = { providers: [], accounts: [], models: [] };
+  let state = { providers: [], accounts: [], models: [], auto: [], autoLast: null };
   let dirty = false;
   let msg = { text: "", err: false };
   const timers = new Set();
@@ -71,12 +71,18 @@ function mount(root) {
   const provBox = h("div", { style: { display: "flex", flexDirection: "column", gap: "12px" } });
   const imageBox = h("div", { style: { display: "flex", flexWrap: "wrap", gap: "6px" } });
   const modelsBox = h("div", { style: { display: "flex", flexWrap: "wrap", gap: "6px" } });
+  const autoBox = h("div", { style: { display: "flex", flexDirection: "column", gap: "6px" } });
+  const autoLastEl = h("div", { style: S.muted });
+  const autoSelect = h("select", { style: { ...S.btn, alignSelf: "flex-start" }, onChange: (e) => {
+    const m = e.target.value; e.target.value = "";
+    if (m && !state.auto.includes(m)) { state.auto.push(m); dirty = true; paint(); }
+  } });
 
   async function refresh(keepEdits) {
     try {
       const s = await api("GET", "/state");
-      state.accounts = s.accounts; state.models = s.models;
-      if (!keepEdits) state.providers = s.providers.map((p) => ({ ...p, orig_name: p.name }));
+      state.accounts = s.accounts; state.models = s.models; state.autoLast = s.auto_last || null;
+      if (!keepEdits) { state.providers = s.providers.map((p) => ({ ...p, orig_name: p.name })); state.auto = s.auto || []; }
       paint();
     } catch (e) {
       say("No se pudo contactar con el servicio local de modelos (127.0.0.1:8318). Ábrelo con el comando chatgpt2. " + e.message, true);
@@ -101,6 +107,23 @@ function mount(root) {
     imageBox.replaceChildren(...(imgs.length ? imgs.map((m) => h("span", { style: { border: BORDER, borderRadius: "999px", padding: "2px 10px", fontSize: "12px" } }, m)) : [h("span", { style: S.muted }, "Ningún modelo de imagen disponible: conecta Antigravity arriba.")]));
     // proveedores
     provBox.replaceChildren(...state.providers.map(providerCard));
+    paintAuto();
+  }
+
+  function paintAuto() {
+    const move = (i, d) => { const j = i + d; if (j < 0 || j >= state.auto.length) return; [state.auto[i], state.auto[j]] = [state.auto[j], state.auto[i]]; dirty = true; paintAuto(); };
+    autoBox.replaceChildren(...(state.auto.length
+      ? state.auto.map((m, i) => h("div", { style: { display: "flex", alignItems: "center", gap: "8px", border: BORDER, borderRadius: "10px", padding: "6px 10px", background: CARD } },
+          h("b", { style: { width: "22px", opacity: ".6" } }, String(i + 1)),
+          h("span", { style: { flex: "1", fontSize: "13px" } }, m, state.models.includes(m) ? "" : h("span", { style: { color: "#ef4444", marginLeft: "8px" } }, "no disponible ahora")),
+          h("button", { style: S.btn, title: "Subir", onClick: () => move(i, -1) }, "▲"),
+          h("button", { style: S.btn, title: "Bajar", onClick: () => move(i, 1) }, "▼"),
+          h("button", { style: S.btn, title: "Quitar de AUTO", onClick: () => { state.auto.splice(i, 1); dirty = true; paintAuto(); } }, "✕")))
+      : [h("div", { style: S.muted }, "AUTO está apagado: añade al menos un modelo para que aparezca «AUTO» en el selector de Codex.")]));
+    const free = state.models.filter((m) => !/image/i.test(m) && !state.auto.includes(m));
+    autoSelect.replaceChildren(h("option", { value: "" }, "+ Añadir modelo a AUTO…"), ...free.map((m) => h("option", { value: m }, m)));
+    const l = state.autoLast;
+    autoLastEl.textContent = l && l.model ? "Último modelo usado por AUTO: " + l.model + (l.skipped && l.skipped.length ? " (saltó: " + l.skipped.join(", ") + ")" : "") : "";
   }
 
   function field(label, input, grow) {
@@ -141,6 +164,7 @@ function mount(root) {
   async function save() {
     say("Guardando…");
     try {
+      await api("PUT", "/auto", { models: state.auto });
       await api("PUT", "/providers", { providers: state.providers });
       dirty = false;
       await applyNow("Guardado.");
@@ -190,6 +214,10 @@ function mount(root) {
         h("h2", { style: S.h2 }, "Proveedores con API (URL base + clave)"), provBox, h("div", {}, tplSelect)),
       h("section", { style: { display: "flex", flexDirection: "column", gap: "10px" } },
         h("h2", { style: S.h2 }, "Modelos disponibles ahora"), modelsBox),
+      h("section", { style: { display: "flex", flexDirection: "column", gap: "8px" } },
+        h("h2", { style: S.h2 }, "AUTO · cambia de modelo solo"),
+        h("div", { style: S.muted }, "Aparece como un modelo más («AUTO») en el selector de Codex. Usa el primero de esta lista; si falla o se queda sin cuota o límite, pasa solo al siguiente (y lo vuelve a probar pasados unos minutos). Solo cambia antes de que el modelo empiece a responder: una respuesta ya empezada no se interrumpe. Al cambiar de modelo se descarta el razonamiento cifrado del anterior."),
+        autoBox, autoSelect, autoLastEl),
       h("section", { style: { display: "flex", flexDirection: "column", gap: "8px" } },
         h("h2", { style: S.h2 }, "Generación de imágenes (Gemini)"), imageBox,
         h("div", { style: S.muted }, "Cualquier modelo del clon puede pedir imágenes con la herramienta «generate_image» (también edita con imágenes de referencia y elige relación de aspecto). Las guarda en ~/.codex-2/generated_images/gemini/. Si la cuota de la cuenta se agota, la herramienta avisa cuándo se restablece.")),
