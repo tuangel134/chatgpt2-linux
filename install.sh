@@ -54,6 +54,9 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+# Todo el cuerpo va dentro de main(): así, con «curl | bash», bash lee el script completo antes de ejecutarlo
+# y ningún comando (apt, sudo...) puede tragarse el resto del script desde la entrada estándar.
+main() {
 # ---------------------------------------------------------------- 0. comprobaciones previas
 step "Comprobando el sistema"
 [ "$(uname -s)" = "Linux" ] || die "Solo Linux (la app de OpenAI para escritorio en Linux es la que se parchea)."
@@ -78,10 +81,10 @@ pm_install() {  # instala paquetes con el gestor detectado
   [ -n "$PM" ] || die "No encuentro apt/dnf/pacman/zypper. Instala a mano: $*"
   [ -n "$SUDO" ] || die "Faltan paquetes ($*) y no hay sudo. Instálalos como administrador y vuelve a ejecutar."
   case "$PM" in
-    apt-get) $SUDO apt-get update -qq || true; $SUDO apt-get install -y "$@" ;;
-    dnf)     $SUDO dnf install -y "$@" ;;
-    pacman)  $SUDO pacman -S --needed --noconfirm "$@" ;;
-    zypper)  $SUDO zypper --non-interactive install "$@" ;;
+    apt-get) $SUDO apt-get update -qq </dev/null || true; $SUDO apt-get install -y "$@" </dev/null ;;
+    dnf)     $SUDO dnf install -y "$@" </dev/null ;;
+    pacman)  $SUDO pacman -S --needed --noconfirm "$@" </dev/null ;;
+    zypper)  $SUDO zypper --non-interactive install "$@" </dev/null ;;
   esac
 }
 
@@ -319,3 +322,5 @@ cat <<EOF
     Guía completa en el README.
 EOF
 [ "$LDD_OK" -eq 1 ] || warn "Revisa las librerías que faltan (arriba) antes de abrir la app."
+}
+main "$@"
