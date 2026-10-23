@@ -211,11 +211,12 @@ Puedes conectar **todas las cuentas que quieras** de Antigravity, Claude y ChatG
 
 1. Suscríbete a Go (o Go Plus) en la [consola de OpenCode](https://opencode.ai/console) y copia tu clave API.
 2. Abre **Ajustes → Modelos personalizados → OpenCode Go**, pega la clave y pulsa **Conectar OpenCode Go**.
-3. Reinicia ChatGPT 2. Los modelos salen en el selector de Codex como *«Kimi K3 (OpenCode Go)»*, *«GLM-5.3 (OpenCode Go)»*, etc. (su identificador lleva el prefijo `go-`, para no chocar con otros proveedores).
+3. Reinicia ChatGPT 2 (la lista de modelos de Codex se lee al abrir la app; tras aplicar cambios aparece un botón **Reiniciar ChatGPT 2 ahora**). Los modelos salen en el selector de Codex como *«Kimi K3 (OpenCode Go)»*, *«GLM-5.3 (OpenCode Go)»*, etc. (su identificador lleva el prefijo `go-`, para no chocar con otros proveedores).
 
 Cómo funciona por dentro:
 
-- La lista de modelos se pide a `opencode.ai/inference/go/v1/models` (es pública) cada vez que aplicas; el botón **Actualizar modelos** la vuelve a consultar. Si no hay conexión, se usa la lista que documenta OpenCode.
+- **Se actualiza sola cada día**: el hub pide la lista a `opencode.ai/inference/go/v1/models` (es pública) al arrancar si pasaron más de 24 h y después una vez al día. Si OpenCode añadió o retiró algún modelo, regenera el catálogo y el proxy. El botón **Actualizar modelos** hace lo mismo al momento y te dice qué modelos son nuevos y cuáles se retiraron (reinicia ChatGPT 2 para verlos). Si no hay conexión, se usa la última lista buena guardada, y si no hay ninguna, la que documenta OpenCode.
+- **Modelo principal por defecto**: al conectar OpenCode Go se pone **DeepSeek V4.1 Flash** como modelo de los chats nuevos. Se cambia en *Ajustes → Modelos personalizados → Modelo principal por defecto*.
 - Cada modelo usa el protocolo que le corresponde y el proxy se encarga de traducirlo: chat (`/openai/v1/chat/completions`), Responses (`/openai/v1/responses`), Anthropic (`/anthropic/v1/messages`) o Google (`/google/v1beta/models/…`). Los modelos nuevos que OpenCode añada y que no estén en la documentación se tratan por familia (`gpt-`, `grok-`, `muse-` → Responses; `claude-`, `qwen` → Anthropic; `gemini-` → Google; el resto → chat).
 - La clave se guarda con permisos `0600` y la pantalla solo muestra los últimos 4 caracteres. Usa tus límites de Go: con *Extra usage* activado en la consola, Go pasa a tu saldo al agotar el límite.
 - Contexto e imágenes de cada modelo son aproximaciones por familia (OpenCode no publica esos datos en su lista).
