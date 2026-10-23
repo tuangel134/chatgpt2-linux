@@ -204,14 +204,41 @@ test("leer archivos: por trozos dentro de zonas permitidas; fuera de ellas, no",
   assert.equal((await phone.ask({ type: "file", path: link })).ok, false);                                       // un enlace simbólico no saca de la zona
 });
 
-test("conversación en uso por la app de escritorio: aviso claro y opción de continuar en una copia", async () => {
+test("conversación bloqueada por la app de escritorio: sigue sola en una copia y la recuerda", async () => {
   const ws = (await phone.ask({ type: "status" })).workspaces.find((w) => w.name === "web");
-  const r = await phone.ask({ type: "send", workspaceId: ws.id, sessionId: "t-busy", text: "hola" });
-  assert.equal(r.ok, false); assert.equal(r.code, "busy"); assert.match(r.error, /continuar en una copia/);
-  const f = await phone.ask({ type: "send", workspaceId: ws.id, sessionId: "t-busy", text: "sigue", fork: true });
-  assert.equal(f.ok, true); assert.match(f.sessionId, /^t-fork-/);                                           // sigue en otro hilo
-  let st; for (let i = 0; i < 40; i++) { st = (await phone.ask({ type: "job", jobId: f.jobId })).status; if (st.status !== "running") break; await new Promise((x) => setTimeout(x, 50)); }
-  assert.equal(st.status, "done"); assert.equal(st.sessionId, f.sessionId);
+  const wait = async (id) => { let st; for (let i = 0; i < 40; i++) { st = (await phone.ask({ type: "job", jobId: id })).status; if (st.status !== "running") break; await new Promise((x) => setTimeout(x, 50)); } return st; };
+  const f = await phone.ask({ type: "send", workspaceId: ws.id, sessionId: "t-busy", text: "sigue" });
+  assert.equal(f.ok, true); assert.match(f.sessionId, /^t-fork-/); assert.equal(f.forkedFrom, "t-busy");   // sin error, en otro hilo
+  assert.equal((await wait(f.jobId)).status, "done");
+  const g = await phone.ask({ type: "send", workspaceId: ws.id, sessionId: "t-busy", text: "otra vez" });
+  assert.equal(g.sessionId, f.sessionId);                                                                  // reutiliza la misma copia
+  await wait(g.jobId);
+});
+
+test("comandos «/»: compactar, revisar, renombrar, objetivo, estado, mcp, skills, archivos, diff, permisos, fork, archivar", async () => {
+  const ws = (await phone.ask({ type: "status" })).workspaces.find((w) => w.name === "web");
+  const sl = (o) => phone.ask({ type: "slash", workspaceId: ws.id, sessionId: "t-alpha", ...o });
+  const wait = async (id) => { let st; for (let i = 0; i < 60; i++) { st = (await phone.ask({ type: "job", jobId: id })).status; if (st.status !== "running") break; await new Promise((x) => setTimeout(x, 50)); } return st; };
+  const c = await sl({ cmd: "compact" }); assert.equal(c.ok, true, JSON.stringify(c));
+  const cs = await wait(c.jobId); assert.equal(cs.status, "done"); assert.equal(cs.result, "Contexto compactado.");
+  const bad = await sl({ cmd: "review", target: { type: "commit", sha: "zz; rm" } }); assert.equal(bad.ok, false);
+  const rv = await sl({ cmd: "review", target: { type: "baseBranch", branch: "main" } }); assert.equal(rv.ok, true);
+  assert.match((await wait(rv.jobId)).result, /baseBranch/);
+  assert.equal((await sl({ cmd: "rename", name: "Nuevo nombre" })).name, "Nuevo nombre");
+  assert.equal((await sl({ cmd: "goal", action: "get" })).goal, null);
+  assert.equal((await sl({ cmd: "goal", action: "set", objective: "terminar" })).goal.objective, "terminar");
+  assert.equal((await sl({ cmd: "goal", action: "clear" })).goal, null);
+  const info = await sl({ cmd: "info" }); assert.equal(info.thread.model, "gpt-fake"); assert.equal(info.rateLimits.rateLimits.primary.usedPercent, 30);
+  assert.deepEqual((await sl({ cmd: "mcp" })).servers, [{ name: "master", status: "", auth: "unsupported", tools: 2, error: "" }]);
+  assert.deepEqual((await sl({ cmd: "skills" })).skills.map((k) => k.name), ["pdf"]);
+  assert.equal((await sl({ cmd: "files", query: "app" })).files[0].path, "src/app.js");
+  assert.equal((await sl({ cmd: "permission", value: "danger-full-access" })).ok, false);          // el acceso completo no se activa desde el teléfono
+  assert.equal((await sl({ cmd: "permission", value: "read-only" })).permission, "read-only");
+  await sl({ cmd: "permission", value: "workspace-write" });
+  assert.match((await sl({ cmd: "fork" })).sessionId, /^t-fork-/);
+  assert.equal((await sl({ cmd: "archive" })).ok, true);
+  assert.equal((await sl({ cmd: "nada" })).ok, false);
+  assert.equal((await phone.ask({ type: "slash", workspaceId: ws.id, cmd: "compact" })).ok, false);   // sin conversación
 });
 
 test("dispositivos: se listan y se pueden revocar", async () => {

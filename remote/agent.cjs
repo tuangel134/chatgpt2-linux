@@ -184,11 +184,13 @@ class AppServer {
 }
 const codex = new AppServer();
 const jobs = new Map();       // jobId -> {threadId, turnId, status, error, sessionId, text}
+const usage = new Map();      // hilo -> último uso de contexto (para /estado)
 const loaded = new Set();     // hilos ya reanudados en este app-server
 codex.onNotify = (m) => {
   if (m.method === "__exit") { loaded.clear(); for (const j of jobs.values()) if (j.status === "running") { j.status = "error"; j.error = "Codex se cerró durante la tarea."; } return; }
   const p = m.params || {};
   if (m.method === "turn/completed" && p.turn) {
+    for (const j of jobs.values()) if (j.kind === "compact" && j.threadId === p.threadId && j.status === "running") { j.status = "done"; j.text = "Contexto compactado."; }
     for (const j of jobs.values()) if (j.threadId === p.threadId && j.turnId === p.turn.id) {
       if (p.turn.status === "failed") { j.status = "error"; j.error = (p.turn.error && (p.turn.error.message || JSON.stringify(p.turn.error))) || "El turno falló."; }
       else if (p.turn.status === "interrupted") { j.status = "cancelled"; }
@@ -196,6 +198,10 @@ codex.onNotify = (m) => {
     }
   } else if (m.method === "error" && p.willRetry === false) {
     for (const j of jobs.values()) if (j.threadId === p.threadId && j.status === "running") { j.status = "error"; j.error = (p.error && p.error.message) || "Error del modelo."; }
+  } else if (m.method === "thread/tokenUsage/updated" && p.tokenUsage) {
+    usage.set(p.threadId, p.tokenUsage);
+  } else if (m.method === "thread/compacted") {
+    for (const j of jobs.values()) if (j.kind === "compact" && j.threadId === p.threadId && j.status === "running") { j.status = "done"; j.text = "Contexto compactado."; }
   } else if (m.method === "item/agentMessage/delta") {
     for (const j of jobs.values()) if (j.threadId === p.threadId && j.turnId === p.turnId && j.status === "running") {
       if (j.itemId !== p.itemId) { j.itemId = p.itemId; j.partial = ""; }
@@ -288,22 +294,27 @@ async function ensureLoaded(threadId) {
   loaded.add(threadId);
 }
 
-async function start(workspaceId, sessionId, text, model, effort, attachments, fork) {
+async function start(workspaceId, sessionId, text, model, effort, attachments, fork, ephemeral) {
   model = (typeof model === "string" && model.trim()) || settings.model || "";
   const root = await rootOf(workspaceId);
-  let threadId = sessionId;
+  let threadId = sessionId, forkedFrom = "";
   if (threadId) {
     if ([...jobs.values()].some((j) => j.threadId === threadId && j.status === "running")) throw new Error("Ya hay una tarea en curso en esta conversación. Espera o cancélala.");
-    try { await ensureLoaded(threadId); }
-    catch (e) {
-      if (!/active writer/i.test(String(e.message))) throw e;
-      // La app de escritorio tiene esta conversación abierta/en uso (p. ej. una automatización) y solo puede escribir un proceso a la vez.
-      if (!fork) { const err = new Error("Esa conversación la tiene en uso la app de ChatGPT 2 en la PC (por ejemplo una automatización). Puedes continuar en una copia: tendrá todo el historial y no toca la original."); err.code = "busy"; throw err; }
-      const f = await codex.call("thread/fork", { threadId, excludeTurns: true, approvalPolicy: "never", sandbox: settings.permission });
-      threadId = f.thread.id; loaded.add(threadId);
+    const prior = settings.forks && settings.forks[threadId];
+    if (prior) { try { await ensureLoaded(prior); threadId = prior; forkedFrom = sessionId; } catch { delete settings.forks[sessionId]; saveSettings(); } }
+    if (threadId === sessionId) {
+      try { await ensureLoaded(threadId); }
+      catch (e) {
+        if (!/active writer/i.test(String(e.message))) throw e;
+        // La app de escritorio mantiene bloqueada la conversación (aunque esté parada) y solo puede escribir un proceso a la vez:
+        // se sigue en una copia con todo el historial y se recuerda para los mensajes siguientes.
+        const f = await codex.call("thread/fork", { threadId, excludeTurns: true, approvalPolicy: "never", sandbox: settings.permission });
+        settings.forks = { ...(settings.forks || {}), [sessionId]: f.thread.id }; saveSettings();
+        threadId = f.thread.id; loaded.add(threadId); forkedFrom = sessionId;
+      }
     }
   } else {
-    const t = await codex.call("thread/start", { cwd: root, approvalPolicy: "never", sandbox: settings.permission, ...(model ? { model } : {}) });
+    const t = await codex.call("thread/start", { cwd: root, approvalPolicy: "never", sandbox: settings.permission, ...(ephemeral ? { ephemeral: true } : {}), ...(model ? { model } : {}) });
     threadId = t.thread.id; loaded.add(threadId);
   }
   const input = [], files = [];
@@ -314,7 +325,7 @@ async function start(workspaceId, sessionId, text, model, effort, attachments, f
   const jobId = crypto.randomUUID();
   jobs.set(jobId, { threadId, turnId: r.turn.id, status: "running", error: "", sessionId: threadId, text: "", partial: "", itemId: "", activity: [], at: Date.now() });
   for (const [k, j] of jobs) if (j.status !== "running" && Date.now() - j.at > 3600_000) jobs.delete(k);
-  return { jobId, sessionId: threadId };
+  return { jobId, sessionId: threadId, ...(forkedFrom ? { forkedFrom } : {}) };
 }
 async function cancel(workspaceId, sessionId) {
   const j = [...jobs.values()].find((x) => x.threadId === sessionId && x.status === "running");
@@ -419,6 +430,91 @@ function automations() {
   return out.sort((a, b) => (a.nextRunAt || Infinity) - (b.nextRunAt || Infinity));
 }
 
+// ------------------------------------------------------------------ comandos «/» (los mismos de Codex que tienen equivalente en el teléfono)
+async function needWriter(threadId) {
+  try { await ensureLoaded(threadId); }
+  catch (e) { if (/active writer/i.test(String(e.message))) { const err = new Error("Esa conversación la tiene en uso la app de ChatGPT 2 en la PC (por ejemplo una automatización). Usa /bifurcar para seguir en una copia."); err.code = "busy"; throw err; } throw e; }
+}
+const sid = (c) => { const v = typeof c.sessionId === "string" ? c.sessionId : ""; if (!/^[\w-]{4,64}$/.test(v)) throw new Error("Primero abre o crea una conversación."); return v; };
+function newJob(extra) { const jobId = crypto.randomUUID(); jobs.set(jobId, { status: "running", error: "", text: "", partial: "", itemId: "", activity: [], at: Date.now(), ...extra }); return jobId; }
+async function slash(c) {
+  switch (c.cmd) {
+    case "compact": {
+      const threadId = sid(c); await needWriter(threadId); await codex.call("thread/compact/start", { threadId });
+      const jobId = newJob({ kind: "compact", threadId, turnId: "", sessionId: threadId });
+      setTimeout(() => { const j = jobs.get(jobId); if (j && j.status === "running") { j.status = "done"; j.text = "Contexto compactado."; } }, 120000).unref?.();
+      return { jobId, sessionId: threadId };
+    }
+    case "review": {
+      const threadId = sid(c), t = c.target || {}; let target;
+      if (t.type === "uncommittedChanges") target = { type: "uncommittedChanges" };
+      else if (t.type === "baseBranch" && /^[\w][\w./-]{0,199}$/.test(String(t.branch))) target = { type: "baseBranch", branch: String(t.branch) };
+      else if (t.type === "commit" && /^[0-9a-fA-F]{7,40}$/.test(String(t.sha))) target = { type: "commit", sha: String(t.sha), title: null };
+      else if (t.type === "custom" && typeof t.instructions === "string" && t.instructions.trim() && t.instructions.length < 2000) target = { type: "custom", instructions: t.instructions.trim() };
+      else throw new Error("Elige qué revisar: cambios sin confirmar, una rama, un commit o instrucciones propias.");
+      await needWriter(threadId);
+      const r = await codex.call("review/start", { threadId, target, delivery: "inline" });
+      const id = r.reviewThreadId || threadId; loaded.add(id);
+      return { jobId: newJob({ threadId: id, turnId: r.turn.id, sessionId: id }), sessionId: id };
+    }
+    case "rename": { const name = String(c.name || "").trim().slice(0, 120); if (!name) throw new Error("Escribe el nombre nuevo: /renombrar mi nombre."); await codex.call("thread/name/set", { threadId: sid(c), name }); return { name }; }
+    case "archive": { const threadId = sid(c); await codex.call("thread/archive", { threadId }); loaded.delete(threadId); for (const [k, v] of Object.entries(settings.forks || {})) if (v === threadId) delete settings.forks[k]; saveSettings(); return {}; }
+    case "fork": { const f = await codex.call("thread/fork", { threadId: sid(c), excludeTurns: true, approvalPolicy: "never", sandbox: settings.permission }); loaded.add(f.thread.id); return { sessionId: f.thread.id, title: title(f.thread) }; }
+    case "goal": {
+      const threadId = sid(c), act = String(c.action || "get");
+      if (act === "clear") { await codex.call("thread/goal/clear", { threadId }); return { goal: null }; }
+      if (act === "set") { const objective = String(c.objective || "").trim().slice(0, 2000); if (!objective) throw new Error("Escribe el objetivo: /objetivo terminar la migración."); await needWriter(threadId); const r = await codex.call("thread/goal/set", { threadId, objective }); return { goal: r.goal || null }; }
+      const r = await codex.call("thread/goal/get", { threadId }); return { goal: r.goal || null };
+    }
+    case "info": {
+      const out = { permission: settings.permission, model: settings.model || "", relay: state ? state.relayUrl : "" };
+      if (!out.model) { try { const m = /^model\s*=\s*"([^"]+)"/m.exec(fs.readFileSync(path.join(CODEX_HOME, "config.toml"), "utf8")); if (m) out.model = m[1]; } catch {} }
+      if (typeof c.sessionId === "string" && /^[\w-]{4,64}$/.test(c.sessionId)) {
+        try {
+          const t = (await codex.call("thread/read", { threadId: c.sessionId, includeTurns: false })).thread;
+          out.thread = { id: t.id, name: t.name || "", cwd: t.cwd, model: t.model || "", provider: t.modelProvider || "", createdAt: t.createdAt, updatedAt: t.updatedAt, status: t.status && t.status.type, branch: t.gitInfo && t.gitInfo.branch || "" };
+        } catch (e) { out.threadError = e.message; }
+        const u = usage.get(c.sessionId);
+        if (u) out.context = { used: u.last && u.last.totalTokens || 0, total: u.total && u.total.totalTokens || 0, window: u.modelContextWindow || null };
+      }
+      try { out.rateLimits = await codex.call("account/rateLimits/read", {}, 8000); } catch { out.rateLimits = null; }
+      return out;
+    }
+    case "mcp": {
+      const r = await codex.call("mcpServerStatus/list", {}, 30000);
+      return { servers: (r.data || []).map((x) => ({ name: x.name, status: typeof x.runtimeStatus === "string" ? x.runtimeStatus : (x.runtimeStatus && (x.runtimeStatus.status || x.runtimeStatus.state || x.runtimeStatus.type)) || "", auth: x.authStatus || "", tools: Object.keys(x.tools || {}).length, error: x.toolsError || "" })) };
+    }
+    case "skills": {
+      const root = await rootOf(String(c.workspaceId || ""));
+      const r = await codex.call("skills/list", { cwds: [root], forceReload: false }, 30000);
+      const seen = new Set(), skills = [];
+      for (const e of r.data || []) for (const k of e.skills || []) if (k.enabled && !seen.has(k.name)) { seen.add(k.name); skills.push({ name: k.name, description: String(k.shortDescription || k.description || "").slice(0, 160) }); }
+      return { skills };
+    }
+    case "files": {
+      const root = await rootOf(String(c.workspaceId || "")), q = String(c.query || "").trim().slice(0, 80);
+      if (!q) return { files: [] };
+      const r = await codex.call("fuzzyFileSearch", { query: q, roots: [root] }, 20000);
+      return { files: (r.files || []).slice(0, 30).map((f) => ({ path: String(f.path), name: String(f.file_name || path.basename(f.path)) })) };
+    }
+    case "diff": {
+      const root = await rootOf(String(c.workspaceId || ""));
+      const git = (...a) => cp.spawnSync("git", ["-C", root, ...a], { encoding: "utf8", timeout: 15000, maxBuffer: 4_000_000 });
+      const top = git("rev-parse", "--show-toplevel"); if (top.status !== 0) throw new Error("Esta carpeta no es un repositorio git.");
+      const status = git("status", "--short").stdout || "", stat = git("diff", "--no-color", "--stat").stdout || "";
+      let patch = git("diff", "--no-color").stdout || ""; const truncated = patch.length > 60000; if (truncated) patch = patch.slice(0, 60000);
+      return { branch: (git("rev-parse", "--abbrev-ref", "HEAD").stdout || "").trim(), status, stat, patch, truncated };
+    }
+    case "permission": {
+      const v = String(c.value || "");
+      if (v === "danger-full-access") throw new Error("El acceso completo solo se activa desde Ajustes en la app de la PC.");
+      if (v !== "read-only" && v !== "workspace-write") throw new Error("Permiso desconocido.");
+      settings.permission = v; saveSettings(); loaded.clear(); return { permission: v };
+    }
+    default: throw new Error("Comando desconocido.");
+  }
+}
+
 function capture() {
   const file = path.join(os.tmpdir(), `chatgpt2-shot-${process.pid}-${Date.now()}.png`);
   const tools = [["spectacle", ["-b", "-n", "-f", "-o", file]], ["grim", [file]], ["gnome-screenshot", ["-f", file]], ["scrot", ["-o", file]], ["import", ["-window", "root", file]]];
@@ -439,9 +535,10 @@ async function handleCommand(c) {
     case "send": {
       const text = str("text").trim() || (Array.isArray(c.attachments) && c.attachments.length ? "Mira los archivos adjuntos." : "");
       if (!str("workspaceId") || !text) throw new Error("Faltan workspaceId y texto.");
-      return { ok: true, ...(await start(str("workspaceId"), str("sessionId") || undefined, text, c.model, c.effort, c.attachments, c.fork === true)) };
+      return { ok: true, ...(await start(str("workspaceId"), str("sessionId") || undefined, text, c.model, c.effort, c.attachments, c.fork === true, c.ephemeral === true)) };
     }
     case "models": return { ok: true, ...(await models()) };
+    case "slash": return { ok: true, ...(await slash(c)) };
     case "automations": return { ok: true, automations: automations(), now: Date.now() };
     case "upload": return { ok: true, ...uploadChunk(c) };
     case "file": return { ok: true, ...(await readFileChunk(c.path, c.offset, c.length)) };

@@ -55,6 +55,19 @@ readline.createInterface({ input: process.stdin }).on("line", (l) => {
       active[p.threadId + ":t"] = t; return;
     }
     case "turn/interrupt": { clearTimeout(active[p.threadId + ":t"]); ok({}); out({ jsonrpc: "2.0", method: "turn/completed", params: { threadId: p.threadId, turn: { id: p.turnId, status: "interrupted", items: [] } } }); return; }
+    case "thread/compact/start": ok({}); setTimeout(() => out({ jsonrpc: "2.0", method: "thread/compacted", params: { threadId: p.threadId, turnId: "c" } }), 40); return;
+    case "review/start": { const id = "turn-" + ++n; ok({ reviewThreadId: p.threadId, turn: { id, status: "inProgress", items: [] }, echo: p.target });
+      setTimeout(() => { out({ jsonrpc: "2.0", method: "item/completed", params: { threadId: p.threadId, turnId: id, completedAtMs: 1, item: { type: "agentMessage", id: "r", text: "Revisión: " + p.target.type } } }); out({ jsonrpc: "2.0", method: "turn/completed", params: { threadId: p.threadId, turn: { id, status: "completed", items: [] } } }); }, 60); return; }
+    case "thread/name/set": { const t = threads.find((x) => x.id === p.threadId); if (t) t.name = p.name; return ok({}); }
+    case "thread/archive": return ok({});
+    case "thread/goal/set": global.goal = { threadId: p.threadId, objective: p.objective, status: "active", tokensUsed: 5, timeUsedSeconds: 3 }; return ok({ goal: global.goal });
+    case "thread/goal/get": return ok({ goal: global.goal || null });
+    case "thread/goal/clear": global.goal = null; return ok({});
+    case "thread/read": return ok({ thread: { ...threads.find((t) => t.id === p.threadId), model: "gpt-fake", modelProvider: "openai" } });
+    case "account/rateLimits/read": return ok({ rateLimits: { primary: { usedPercent: 30, windowDurationMins: 300, resetsAt: now() + 3600 }, secondary: { usedPercent: 10, windowDurationMins: 10080, resetsAt: now() + 86400 } } });
+    case "mcpServerStatus/list": return ok({ data: [{ name: "master", runtimeStatus: null, authStatus: "unsupported", tools: { a: {}, b: {} } }], nextCursor: null });
+    case "skills/list": return ok({ data: [{ cwd: p.cwds[0], skills: [{ name: "pdf", description: "x", shortDescription: "Leer PDFs", enabled: true }, { name: "off", description: "y", enabled: false }], errors: [] }] });
+    case "fuzzyFileSearch": return ok({ files: [{ root: p.roots[0], path: "src/app.js", match_type: "file", file_name: "app.js", score: 9 }] });
     default: out({ jsonrpc: "2.0", id: m.id, error: { code: -32601, message: "no soportado " + m.method } });
   }
 });

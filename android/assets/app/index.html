@@ -29,7 +29,8 @@ button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:poin
 .u{display:flex;justify-content:flex-end;margin:14px 0 6px}
 .u .ub{max-width:100%;background:var(--surface2);padding:9px 14px;border-radius:20px;white-space:pre-wrap;word-break:break-word}
 .u .uwrap{max-width:84%}
-.u .ub.clip{opacity:.85}
+.u .ub.clip{max-height:11em;overflow:hidden;-webkit-mask-image:linear-gradient(#000 70%,transparent)}
+.u .more{background:none;border:0;color:var(--muted,#9a9a9a);font-size:13px;padding:4px 10px;margin-top:2px}
 .a{margin:10px 0 6px;word-break:break-word}
 .a p,.u p{margin:0 0 10px}.a p:last-child{margin-bottom:0}
 .a h1,.a h2,.a h3{font-size:1.05em;margin:14px 0 6px}
@@ -115,6 +116,18 @@ button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:poin
 .run{width:8px;height:8px;border-radius:50%;background:var(--accent);animation:b 1.1s infinite}
 .dfoot{display:flex;gap:8px;padding:8px 14px calc(10px + env(safe-area-inset-bottom));border-top:1px solid var(--line)}
 .dfoot button{flex:1;background:var(--surface);border-radius:14px;padding:10px;font-size:14px}
+/* comandos «/» */
+#slashmenu{display:none;background:var(--surface);border-radius:18px;margin:0 2px 8px;max-height:46vh;overflow-y:auto;padding:4px}
+#slashmenu.on{display:block}
+#slashmenu button{display:flex;flex-direction:column;gap:1px;align-items:flex-start;width:100%;text-align:left;padding:9px 12px;border-radius:12px}
+#slashmenu button:active{background:var(--surface2)}
+#slashmenu b{font-weight:600;white-space:nowrap}#slashmenu b i{font-style:normal;color:var(--muted);font-weight:400;font-size:13px}
+#slashmenu span{color:var(--muted);font-size:13px;min-width:0}
+.sys{margin:10px 0;background:var(--surface);border-left:3px solid var(--accent);border-radius:12px;padding:10px 14px;font-size:14px;line-height:1.45;word-break:break-word}
+.sys h4{margin:0 0 6px;font-size:14px;color:var(--accent)}
+.sys pre{margin:6px 0 0;white-space:pre-wrap;font:12px/1.4 ui-monospace,monospace;max-height:50vh;overflow:auto}
+.sys .row{display:flex;justify-content:space-between;gap:12px;padding:2px 0}.sys .row span:first-child{color:var(--muted);white-space:nowrap}.sys .row span:last-child{text-align:right;min-width:0}
+.sys .bar{height:6px;border-radius:3px;background:var(--surface2);overflow:hidden;margin:3px 0 6px}.sys .bar i{display:block;height:100%;background:var(--accent)}
 /* hojas */
 #sheet{position:fixed;left:0;right:0;bottom:0;background:var(--surface);border-radius:22px 22px 0 0;z-index:31;transform:translateY(105%);transition:transform .22s;max-height:78%;display:flex;flex-direction:column;padding-bottom:env(safe-area-inset-bottom)}
 #sheet.on{transform:none}
@@ -142,7 +155,7 @@ button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:poin
     <button class="icon" id="moreBtn" aria-label="Más"><svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="19" cy="12" r="1.2"/></svg></button>
   </div>
   <div id="msgs"></div>
-  <div id="comp"><div id="chips"></div><div id="box">
+  <div id="comp"><div id="slashmenu"></div><div id="chips"></div><div id="box">
     <button id="attach" aria-label="Adjuntar"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button>
     <textarea id="txt" rows="1" placeholder="Pregunta lo que quieras"></textarea>
     <button id="send" aria-label="Enviar"><svg viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"/></svg></button>
@@ -182,7 +195,7 @@ const $ = (s) => document.querySelector(s);
 const store = { get: (k, d) => { try { const v = localStorage.getItem("c2." + k); return v === null ? d : JSON.parse(v); } catch { return d; } }, set: (k, v) => { try { localStorage.setItem("c2." + k, JSON.stringify(v)); } catch {} } };
 
 // ---------------------------------------------------------------- estado
-const S = { ws: [], wsId: store.get("wsId", ""), sid: store.get("sid", ""), msgs: [], models: [], defModel: "", model: store.get("model", ""), effort: store.get("effort", ""), job: null, loading: false, err: "", openProj: store.get("openProj", {}) };
+const S = { ws: [], wsId: store.get("wsId", ""), sid: store.get("sid", ""), msgs: [], models: [], defModel: "", model: store.get("model", ""), effort: store.get("effort", ""), job: null, sys: [], eph: {}, loading: false, err: "", openProj: store.get("openProj", {}) };
 const IMG_RE = /\.(png|jpe?g|gif|webp|bmp)$/i;
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const curWs = () => S.ws.find((w) => w.id === S.wsId);
@@ -290,10 +303,11 @@ function renderMsgs(stick) {
     if (m.role === "tool") { group.push({ kind: m.kind, text, status: m.status, exitCode: m.exitCode }); continue; }
     flush();
     if (m.role === "user" && /^\s*<heartbeat>|<automation_id>|^\s*<instructions>/.test(text.slice(0, 600))) { const id = (/<automation_id>([^<]+)<\/automation_id>/.exec(text) || [])[1]; h += `<details class="tools"><summary>⏱ Se ejecutó la automatización${id ? " · " + esc(id) : ""}</summary><div class="t"><span>${esc(text.slice(0, 2500))}${text.length > 2500 ? "…" : ""}</span></div></details>`; }
-    else if (m.role === "user") { const long = text.length > 420; h += `<div class="u"><div class="uwrap">${m.files && m.files.length ? `<div class="files">${filesHtml(m.files)}</div>` : ""}${text || !(m.files && m.files.length) ? `<div class="ub${long ? " clip" : ""}">${esc(long ? text.slice(0, 420) + "…" : text)}</div>` : ""}</div></div>`; }
+    else if (m.role === "user") { const long = text.length > 420 || text.split("\n").length > 9; h += `<div class="u"><div class="uwrap">${m.files && m.files.length ? `<div class="files">${filesHtml(m.files)}</div>` : ""}${text || !(m.files && m.files.length) ? `<div class="ub${long ? " clip" : ""}">${esc(text)}</div>${long ? '<button class="more" data-more="1">Ver todo</button>' : ""}` : ""}</div></div>`; }
     else h += `<div class="a">${assistantHtml(text)}</div>`;
   }
   flush();
+  for (const x of S.sys) if (x.sid === S.sid) h += `<div class="sys"><h4>${esc(x.title)}</h4>${x.html}</div>`;
   if (S.job && S.job.running) {
     const j = S.job;
     if (j.activity && j.activity.length) h += `<div class="live">${j.activity.map((a) => `<div class="t">${ICON[a.kind] || "•"} ${esc(a.text)}</div>`).join("")}</div>`;
@@ -383,8 +397,9 @@ async function refreshStatus() {
 async function loadModels() { const r = await call({ type: "models" }, 40000); S.models = r.models || []; S.defModel = r.default || ""; if (S.model && !S.models.some((m) => m.id === S.model)) S.model = ""; paintTop(); }
 async function loadMessages(stick) {
   if (!S.sid) { S.msgs = []; renderMsgs(true); return; }
+  if (S.eph[S.sid]) { renderMsgs(stick); return; }   // el chat lateral no se guarda: solo vive aquí
   try { const r = await call({ type: "messages", workspaceId: S.wsId, sessionId: S.sid }, 60000); S.msgs = r.messages || []; S.err = ""; setConn("ok"); }
-  catch (e) { S.err = "No se pudo cargar la conversación: " + e.message; setConn("bad"); }
+  catch (e) { if (/ephemeral/i.test(e.message)) { S.sid = ""; store.set("sid", ""); S.msgs = []; } else { S.err = "No se pudo cargar la conversación: " + e.message; setConn("bad"); } }
   renderMsgs(stick);
 }
 async function openSession(wsId, sid) {
@@ -392,7 +407,7 @@ async function openSession(wsId, sid) {
   $("#msgs").innerHTML = '<div class="empty"><div class="dots"><i></i><i></i><i></i></div></div>'; paintTop(); paintSend();
   await loadMessages(true);
 }
-function newChat(wsId) { if (wsId) { S.wsId = wsId; store.set("wsId", wsId); } S.sid = ""; store.set("sid", ""); S.msgs = []; S.job = null; S.err = ""; paintTop(); renderMsgs(true); paintSend(); $("#txt").focus(); }
+function newChat(wsId) { S.ephemeral = false; if (wsId) { S.wsId = wsId; store.set("wsId", wsId); } S.sid = ""; store.set("sid", ""); S.msgs = []; S.job = null; S.err = ""; paintTop(); renderMsgs(true); paintSend(); $("#txt").focus(); }
 async function reloadAll() { await refreshStatus(); loadModels().catch(() => {}); await loadMessages(true); }
 
 // ---------------------------------------------------------------- adjuntos (se comprimen las fotos y se suben por trozos cifrados)
@@ -444,6 +459,7 @@ async function send() {
   const text = $("#txt").value.trim(); const files = pendingFiles.slice();
   if (S.job && S.job.running) { try { await call({ type: "cancel", workspaceId: S.wsId, sessionId: S.sid }, 30000); toast("Cancelando…", true); } catch (e) { toast(e.message); } return; }
   if (!text && !files.length) return;
+  if (!files.length && await runSlash(text)) return;
   if (!S.wsId) { toast("Elige primero un proyecto en el menú"); return; }
   $("#txt").value = ""; autosize(); S.err = "";
   S.msgs.push({ role: "user", message: { parts: [{ type: "text", text }] }, files: files.map((f) => ({ path: "", name: f.name, image: f.image, local: f.url })) });
@@ -452,10 +468,12 @@ async function send() {
     const attachments = [];
     for (const f of files) { f.state = "subiendo"; paintChips(); try { attachments.push({ id: await uploadOne(f) }); } catch (e) { f.state = "error"; paintChips(); throw new Error("No se pudo subir " + f.name + ": " + e.message); } }
     pendingFiles.length = 0; paintChips();
-    const cmd = { type: "send", workspaceId: S.wsId, sessionId: S.sid || undefined, text, ...(attachments.length ? { attachments } : {}), ...(S.model ? { model: S.model } : {}), ...(S.effort ? { effort: S.effort } : {}) };
+    const cmd = { type: "send", workspaceId: S.wsId, sessionId: S.sid || undefined, text, ...(attachments.length ? { attachments } : {}), ...(S.model ? { model: S.model } : {}), ...(S.effort ? { effort: S.effort } : {}), ...(S.ephemeral && !S.sid ? { ephemeral: true } : {}) };
     S.lastCmd = cmd; S.busyRetry = null;
     const r = await call(cmd, 60000);
+    if (S.ephemeral && !S.sid) S.eph[r.sessionId] = true;
     S.sid = r.sessionId; store.set("sid", S.sid); S.job.id = r.jobId; paintTop(); follow(r.jobId, S.sid);
+    if (r.forkedFrom) { toast("La PC tiene bloqueada la original: sigues en una copia con todo el historial", true); refreshStatus(); }
   } catch (e) { S.job = null; S.err = e.message; if (/continuar en una copia/i.test(e.message) && S.lastCmd) S.busyRetry = S.lastCmd; renderMsgs(true); paintSend(); }
 }
 async function forkAndSend() {
@@ -463,7 +481,7 @@ async function forkAndSend() {
   try { const r = await call({ ...cmd, fork: true }, 60000); S.sid = r.sessionId; store.set("sid", S.sid); S.job.id = r.jobId; paintTop(); refreshStatus(); follow(r.jobId, S.sid); }
   catch (e) { S.job = null; S.err = e.message; renderMsgs(true); paintSend(); }
 }
-document.addEventListener("click", (e) => { if (e.target.closest("[data-fork]")) forkAndSend(); });
+document.addEventListener("click", (e) => { if (e.target.closest("[data-fork]")) forkAndSend(); const m = e.target.closest("[data-more]"); if (m) { const ub = m.previousElementSibling, open = ub.classList.toggle("clip"); m.textContent = open ? "Ver todo" : "Ver menos"; } });
 async function follow(jobId, sid) {
   let misses = 0;
   while (S.job && S.job.running && S.job.id === jobId) {
@@ -473,6 +491,8 @@ async function follow(jobId, sid) {
       const r = await call({ type: "job", jobId }, 40000); misses = 0; const st = r.status;
       if (S.job && S.job.id === jobId) { S.job.partial = st.partial || ""; S.job.activity = st.activity || []; }
       if (st.status !== "running") {
+        if (st.status === "done" && st.result === "Contexto compactado.") S.sys.push({ sid, title: "Compactar", html: "Contexto compactado." });
+        if (S.eph[sid] && st.result) S.msgs.push({ role: "assistant", message: { parts: [{ type: "text", text: st.result }] } });
         S.job = null; if (st.status === "error") S.err = st.error || "La tarea falló."; else if (st.status === "cancelled") S.err = "Tarea cancelada.";
         await loadMessages(true); paintSend(); refreshStatus(); return;
       }
@@ -483,6 +503,90 @@ async function follow(jobId, sid) {
 const autosize = () => { const t = $("#txt"); t.style.height = "auto"; t.style.height = Math.min(140, t.scrollHeight) + "px"; paintSend(); };
 $("#txt").addEventListener("input", autosize);
 $("#send").addEventListener("click", send);
+
+
+// ---------------------------------------------------------------- comandos «/» (los de Codex que tienen sentido en el teléfono)
+const sl = (o, t) => call({ type: "slash", sessionId: S.sid || undefined, workspaceId: S.wsId, ...o }, t || 60000);
+const sysSay = (title, html) => { S.sys.push({ sid: S.sid, title, html }); renderMsgs(true); };
+const needSid = () => { if (S.sid) return true; toast("Primero abre o crea una conversación"); return false; };
+const rowsHtml = (rows) => rows.filter((r) => r[1] !== "" && r[1] != null).map((r) => `<div class="row"><span>${esc(r[0])}</span><span>${esc(String(r[1]))}</span></div>`).join("");
+const fmtN = (n) => (n >= 1e6 ? (n / 1e6).toFixed(1) + " M" : n >= 1e3 ? (n / 1e3).toFixed(1) + " k" : String(n));
+function startJob(r) { S.sid = r.sessionId; store.set("sid", S.sid); S.job = { running: true, partial: "", activity: [], id: r.jobId }; paintTop(); renderMsgs(true); paintSend(); follow(r.jobId, S.sid); }
+const CMDS = [
+  { n: "compactar", a: ["compact"], d: "Resumir la conversación para liberar contexto", run: async () => { if (!needSid()) return; startJob(await sl({ cmd: "compact" })); toast("Compactando…", true); } },
+  { n: "revisar", a: ["review"], h: "[rama X | commit SHA | instrucciones]", d: "Revisar el código del proyecto", run: async (arg) => {
+    if (!needSid()) return;
+    const go = async (target) => startJob(await sl({ cmd: "review", target }));
+    let m;
+    if (!arg) return sheet("Revisar", '<button class="opt" data-t="u">Cambios sin confirmar</button><div class="hint" style="padding:8px 14px;color:var(--muted);font-size:13px">También: <b>/revisar rama main</b>, <b>/revisar commit abc1234</b> o <b>/revisar</b> con tus instrucciones.</div>', (b) => b.addEventListener("click", (e) => { if (!e.target.closest("[data-t]")) return; closeSheet(); go({ type: "uncommittedChanges" }).catch((x) => toast(x.message)); }));
+    if ((m = /^(?:rama|branch)\s+(\S+)$/i.exec(arg))) return go({ type: "baseBranch", branch: m[1] });
+    if ((m = /^commit\s+([0-9a-f]{7,40})$/i.exec(arg))) return go({ type: "commit", sha: m[1] });
+    return go({ type: "custom", instructions: arg });
+  } },
+  { n: "renombrar", a: ["rename"], h: "nombre", d: "Cambiar el nombre de la conversación", run: async (arg) => { if (!needSid()) return; if (!arg) return toast("Escribe el nombre: /renombrar mi nombre"); const r = await sl({ cmd: "rename", name: arg }); sysSay("Renombrar", "Ahora se llama «" + esc(r.name) + "»."); refreshStatus(); } },
+  { n: "archivar", a: ["archive"], d: "Archivar esta conversación", run: async () => { if (!needSid()) return; sheet("¿Archivar esta conversación?", '<button class="opt" data-y="1">Sí, archivar</button><button class="opt" data-y="0">Cancelar</button>', (b) => b.addEventListener("click", async (e) => { const o = e.target.closest("[data-y]"); if (!o) return; closeSheet(); if (o.dataset.y !== "1") return; try { await sl({ cmd: "archive" }); newChat(S.wsId); toast("Conversación archivada", true); refreshStatus(); } catch (x) { toast(x.message); } })); } },
+  { n: "bifurcar", a: ["fork"], d: "Crear una copia de la conversación y seguir en ella", run: async () => { if (!needSid()) return; const r = await sl({ cmd: "fork" }); S.sid = r.sessionId; store.set("sid", S.sid); await loadMessages(true); paintTop(); refreshStatus(); toast("Copia creada: sigues en ella", true); } },
+  { n: "objetivo", a: ["goal"], h: "[texto | borrar]", d: "Ver, fijar o borrar el objetivo del hilo", run: async (arg) => {
+    if (!needSid()) return;
+    if (/^(borrar|clear|quitar)$/i.test(arg)) { await sl({ cmd: "goal", action: "clear" }); return sysSay("Objetivo", "Objetivo borrado."); }
+    const r = await sl(arg ? { cmd: "goal", action: "set", objective: arg } : { cmd: "goal", action: "get" });
+    const g = r.goal;
+    sysSay("Objetivo", g ? `<div>${esc(g.objective)}</div>` + rowsHtml([["Estado", g.status], ["Tokens usados", g.tokensUsed != null ? fmtN(g.tokensUsed) : ""], ["Tiempo", g.timeUsedSeconds ? dur(g.timeUsedSeconds * 1000) : ""]]) : "Sin objetivo. Fija uno con <b>/objetivo texto</b>.");
+  } },
+  { n: "estado", a: ["status"], d: "Modelo, permisos, contexto y límites", run: async () => {
+    const r = await sl({ cmd: "info" }, 40000), t = r.thread || {}, rows = [["Modelo", t.model || S.model || r.model], ["Proveedor", t.provider], ["Permisos", ({ "workspace-write": "Escribir en el proyecto", "read-only": "Solo lectura", "danger-full-access": "Acceso completo" })[r.permission] || r.permission], ["Carpeta", t.cwd], ["Rama", t.branch], ["Conversación", t.id ? t.id.slice(0, 8) + "…" : ""]];
+    let h = rowsHtml(rows);
+    if (r.context && r.context.window) { const pct = Math.min(100, Math.round((r.context.used / r.context.window) * 100)); h += `<div class="row"><span>Contexto</span><span>${fmtN(r.context.used)} / ${fmtN(r.context.window)} (${pct}%)</span></div><div class="bar"><i style="width:${pct}%"></i></div>`; }
+    const rl = r.rateLimits && r.rateLimits.rateLimits;
+    if (rl) for (const [k, w] of [["Límite corto", rl.primary], ["Límite semanal", rl.secondary]]) if (w) { const left = 100 - w.usedPercent; h += `<div class="row"><span>${k}${w.windowDurationMins ? " (" + (w.windowDurationMins >= 1440 ? Math.round(w.windowDurationMins / 1440) + " d" : Math.round(w.windowDurationMins / 60) + " h") + ")" : ""}</span><span>${left}% libre${w.resetsAt ? " · reinicia en " + dur(w.resetsAt * 1000 - pcNow()) : ""}</span></div><div class="bar"><i style="width:${left}%"></i></div>`; }
+    sysSay("Estado", h);
+  } },
+  { n: "mcp", a: [], d: "Servidores MCP conectados", run: async () => { const r = await sl({ cmd: "mcp" }, 40000); sysSay("MCP", r.servers.length ? rowsHtml(r.servers.map((x) => [x.name, (x.status ? x.status + " · " : "") + x.tools + " herramientas" + (x.error ? " · " + x.error : "")])) : "No hay servidores MCP."); } },
+  { n: "habilidades", a: ["skills"], d: "Habilidades (skills) disponibles", run: async () => { const r = await sl({ cmd: "skills" }, 40000); sysSay("Habilidades", r.skills.length ? r.skills.map((k) => `<div><b>${esc(k.name)}</b><br><span style="color:var(--muted);font-size:13px">${esc(k.description)}</span></div>`).join('<div style="height:6px"></div>') : "No hay habilidades."); } },
+  { n: "diff", a: [], d: "Cambios de git del proyecto", run: async () => { const r = await sl({ cmd: "diff" }, 40000); sysSay("Diff" + (r.branch ? " · " + r.branch : ""), !r.status.trim() ? "Sin cambios." : `<pre>${esc(r.stat || r.status)}</pre>${r.patch ? `<details style="margin-top:8px"><summary>Ver parche${r.truncated ? " (recortado)" : ""}</summary><pre>${esc(r.patch)}</pre></details>` : ""}`); } },
+  { n: "archivo", a: ["mention", "mencionar"], h: "texto", d: "Buscar un archivo del proyecto y mencionarlo", run: async (arg) => {
+    if (!arg) return toast("Escribe qué buscar: /archivo nombre");
+    const r = await sl({ cmd: "files", query: arg }, 30000);
+    if (!r.files.length) return toast("No hay archivos que coincidan");
+    sheet("Archivos", r.files.map((f, i) => `<button class="opt" data-i="${i}"><b>${esc(f.name)}</b><br><small style="color:var(--muted)">${esc(f.path)}</small></button>`).join(""), (b) => b.addEventListener("click", (e) => { const o = e.target.closest("[data-i]"); if (!o) return; closeSheet(); const t = $("#txt"); t.value = (t.value ? t.value + " " : "") + r.files[+o.dataset.i].path + " "; autosize(); t.focus(); }));
+  }, keep: true },
+  { n: "permisos", a: ["permissions", "approvals"], h: "[lectura | escribir]", d: "Permisos del agente en la PC", run: async (arg) => {
+    const set = async (v) => { const r = await sl({ cmd: "permission", value: v }); sysSay("Permisos", "Ahora: <b>" + (v === "read-only" ? "solo lectura" : "escribir en el proyecto") + "</b>. El acceso completo solo se activa en la PC."); };
+    if (/^(lectura|read-only|readonly)$/i.test(arg)) return set("read-only");
+    if (/^(escribir|escritura|workspace-write|proyecto)$/i.test(arg)) return set("workspace-write");
+    sheet("Permisos", '<button class="opt" data-v="read-only">Solo lectura</button><button class="opt" data-v="workspace-write">Escribir en el proyecto</button>', (b) => b.addEventListener("click", (e) => { const o = e.target.closest("[data-v]"); if (!o) return; closeSheet(); set(o.dataset.v).catch((x) => toast(x.message)); }));
+  } },
+  { n: "modelo", a: ["model"], d: "Elegir modelo y esfuerzo", run: async () => openModels() },
+  { n: "nuevo", a: ["new", "clear", "limpiar"], d: "Empezar una conversación nueva", run: async () => newChat(S.wsId || (S.ws[0] && S.ws[0].id)) },
+  { n: "lateral", a: ["side"], d: "Pregunta rápida sin guardar conversación", run: async (arg) => { newChat(S.wsId); S.ephemeral = true; toast("Chat lateral: no se guarda en el historial", true); if (arg) { $("#txt").value = arg; autosize(); } } },
+  { n: "automatizaciones", a: ["automations"], d: "Ver las automatizaciones", run: async () => openAutos() },
+  { n: "captura", a: ["screenshot"], d: "Captura del escritorio de la PC", run: async () => shot() },
+  { n: "ayuda", a: ["help"], d: "Lista de comandos", run: async () => sysSay("Comandos", CMDS.map((c) => `<div><b>/${c.n}</b>${c.h ? ' <i style="color:var(--muted);font-style:normal">' + esc(c.h) + "</i>" : ""}<br><span style="color:var(--muted);font-size:13px">${esc(c.d)}</span></div>`).join('<div style="height:6px"></div>') + '<div style="margin-top:10px;color:var(--muted);font-size:13px">Solo en la PC: /init, /plan, /fast, /personality, /mention de IDE, /feedback, /logout, /quit, /ps, /stop, /apps, /plugins, /experimental, /debug-config, /rollout, /agent, /statusline, /title, /theme, /copy, /resume, /diff interactivo, ejecución local de comandos con «!».</div>') },
+];
+const slashFind = (name) => { name = name.toLowerCase(); return CMDS.find((c) => c.n === name || c.a.includes(name)); };
+async function runSlash(text) {
+  const m = /^\/([a-záéíóúñ-]+)(?:\s+([\s\S]*))?$/i.exec(text.trim()); if (!m) return false;
+  const c = slashFind(m[1]); if (!c) return false;
+  if (!c.keep) { $("#txt").value = ""; autosize(); }
+  closeSlash();
+  try { await c.run((m[2] || "").trim()); } catch (e) { toast(e.message); }
+  if (c.keep) { $("#txt").value = ""; autosize(); }
+  return true;
+}
+function closeSlash() { $("#slashmenu").classList.remove("on"); }
+function paintSlash() {
+  const v = $("#txt").value, el = $("#slashmenu"), m = /^\/([a-záéíóúñ-]*)$/i.exec(v);
+  if (!m) return closeSlash();
+  const q = m[1].toLowerCase(), list = CMDS.filter((c) => !q || c.n.startsWith(q) || c.a.some((a) => a.startsWith(q)));
+  if (!list.length) return closeSlash();
+  el.innerHTML = list.map((c) => `<button data-c="${c.n}"><b>/${c.n}${c.h ? ' <i>' + esc(c.h) + "</i>" : ""}</b><span>${esc(c.d)}</span></button>`).join("");
+  el.classList.add("on");
+}
+$("#txt").addEventListener("input", paintSlash);
+$("#slashmenu").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-c]"); if (!b) return; const c = slashFind(b.dataset.c), t = $("#txt");
+  if (c.h) { t.value = "/" + c.n + " "; autosize(); closeSlash(); t.focus(); } else { t.value = "/" + c.n; runSlash(t.value); }
+});
 
 // ---------------------------------------------------------------- automatizaciones
 const AU = { list: [], skew: 0 };
