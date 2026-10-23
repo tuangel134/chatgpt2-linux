@@ -40,7 +40,9 @@ readline.createInterface({ input: process.stdin }).on("line", (l) => {
         out({ jsonrpc: "2.0", method: "item/agentMessage/delta", params: { threadId: p.threadId, turnId: id, itemId: "a", delta: "mundo" } });
       }, 30);
       const t = setTimeout(() => {
-        const text = "Respuesta a: " + p.input[0].text + (p.model ? " [" + p.model + "]" : "") + (p.effort ? " {" + p.effort + "}" : "");
+        global.lastInput = p.input;
+        const extra = p.input.length > 1 ? " <" + p.input.slice(1).map((i) => i.type).join(",") + ">" : "";
+        const text = "Respuesta a: " + p.input[0].text.split("\n")[0] + (p.model ? " [" + p.model + "]" : "") + (p.effort ? " {" + p.effort + "}" : "") + extra;
         out({ jsonrpc: "2.0", method: "item/completed", params: { threadId: p.threadId, turnId: id, completedAtMs: 1, item: { type: "agentMessage", id: "a", text } } });
         if (JSON.stringify(p.input).includes("falla")) out({ jsonrpc: "2.0", method: "turn/completed", params: { threadId: p.threadId, turn: { id, status: "failed", error: { message: "boom" }, items: [] } } });
         else out({ jsonrpc: "2.0", method: "turn/completed", params: { threadId: p.threadId, turn: { id, status: "completed", items: [] } } });

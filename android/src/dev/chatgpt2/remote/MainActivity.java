@@ -6,6 +6,12 @@ import android.app.Dialog;
 import android.app.KeyguardManager;
 import android.content.Context;
 import android.content.Intent;
+import android.content.ContentValues;
+import android.net.Uri;
+import android.os.Build;
+import android.os.Environment;
+import android.provider.MediaStore;
+import android.webkit.ValueCallback;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Color;
@@ -81,6 +87,7 @@ public final class MainActivity extends Activity {
     // Interfaz del chat: una página local (assets/app) dentro de un WebView; aquí solo viven el emparejamiento, el cifrado y el relay.
     private WebView web; private boolean webMode, webLoaded; private LinearLayout rootView, headerView;
     private final ExecutorService calls = Executors.newFixedThreadPool(4);
+    private ValueCallback<Uri[]> fileCallback; private static final int PICK_FILES = 55;
     private boolean anywhere;
 	private boolean appUnlocked, unlockInFlight, refreshInFlight, sendInFlight, captureInFlight;
     private Dialog remoteBrowserDialog;
@@ -178,6 +185,16 @@ public final class MainActivity extends Activity {
                 return true; // la página local nunca navega a otro sitio
             }
         });
+        web.setWebChromeClient(new WebChromeClient() {
+            // Adjuntar fotos y archivos: la página usa <input type="file"> y aquí se abre el selector del sistema.
+            @Override public boolean onShowFileChooser(WebView view, ValueCallback<Uri[]> callback, FileChooserParams params) {
+                if (fileCallback != null) fileCallback.onReceiveValue(null);
+                fileCallback = callback;
+                try { Intent intent = params.createIntent(); intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true); startActivityForResult(intent, PICK_FILES); }
+                catch (Exception error) { fileCallback = null; return false; }
+                return true;
+            }
+        });
         root.addView(web, new LinearLayout.LayoutParams(-1, 0, 1));
         setContentView(root);
     }
@@ -204,6 +221,27 @@ public final class MainActivity extends Activity {
             });
         }
         @android.webkit.JavascriptInterface public void unpair() { runOnUiThread(() -> clearPairing()); }
+        /** Guarda en Descargas/ChatGPT 2 un archivo o imagen que mandó la PC. */
+        @android.webkit.JavascriptInterface public void saveFile(String name, String mime, String base64) {
+            calls.execute(() -> {
+                String safe = String.valueOf(name).replaceAll("[\\\\/:*?\"<>|]", "_");
+                boolean ok = false;
+                try {
+                    byte[] data = Base64.decode(base64, Base64.DEFAULT);
+                    if (Build.VERSION.SDK_INT >= 29) {
+                        ContentValues values = new ContentValues();
+                        values.put(MediaStore.Downloads.DISPLAY_NAME, safe); values.put(MediaStore.Downloads.MIME_TYPE, mime == null || mime.isEmpty() ? "application/octet-stream" : mime);
+                        values.put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/ChatGPT 2");
+                        Uri uri = getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values);
+                        if (uri != null) { try (OutputStream out = getContentResolver().openOutputStream(uri)) { out.write(data); ok = true; } }
+                    } else {
+                        File dir = getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS); if (dir != null) { dir.mkdirs(); try (OutputStream out = new FileOutputStream(new File(dir, safe))) { out.write(data); ok = true; } }
+                    }
+                } catch (Exception ignored) { }
+                final boolean done = ok;
+                runOnUiThread(() -> { if (web != null) web.evaluateJavascript("window.__saved(" + done + "," + JSONObject.quote(safe) + ")", null); });
+            });
+        }
     }
     private void deliver(String id, boolean ok, String data) { runOnUiThread(() -> { if (web != null) web.evaluateJavascript("window.__native(" + JSONObject.quote(id) + "," + ok + "," + JSONObject.quote(data) + ")", null); }); }
     @Override public void onBackPressed() {
@@ -660,7 +698,7 @@ public final class MainActivity extends Activity {
         setStatus("Ese QR no pertenece a ChatGPT 2 Remote.");
     }
 
-    @Override protected void onActivityResult(int request, int result, Intent data) { super.onActivityResult(request, result, data); if (request == SCAN_QR && result == RESULT_OK && data != null) applyPairingPayload(data.getStringExtra(QrScannerActivity.RESULT_PAYLOAD)); if (request == UNLOCK_CHAT) { unlockInFlight = false; if (result == RESULT_OK) { appUnlocked = true; showChat(); setStatus("Canal seguro desbloqueado"); refresh(); } else { showPairing(); setStatus("Desbloquea el teléfono para abrir ChatGPT 2 Remote."); } } }
+    @Override protected void onActivityResult(int request, int result, Intent data) { super.onActivityResult(request, result, data); if (request == PICK_FILES) { if (fileCallback != null) { fileCallback.onReceiveValue(result == RESULT_OK ? WebChromeClient.FileChooserParams.parseResult(result, data) : null); fileCallback = null; } return; } if (request == SCAN_QR && result == RESULT_OK && data != null) applyPairingPayload(data.getStringExtra(QrScannerActivity.RESULT_PAYLOAD)); if (request == UNLOCK_CHAT) { unlockInFlight = false; if (result == RESULT_OK) { appUnlocked = true; showChat(); setStatus("Canal seguro desbloqueado"); refresh(); } else { showPairing(); setStatus("Desbloquea el teléfono para abrir ChatGPT 2 Remote."); } } }
     private JSONObject request(String base, String method, String path, JSONObject body, String bearer) throws Exception { HttpURLConnection c = connection(base + path, method, bearer); if (body != null) { c.setDoOutput(true); byte[] bytes = body.toString().getBytes(StandardCharsets.UTF_8); c.setFixedLengthStreamingMode(bytes.length); try (OutputStream out = c.getOutputStream()) { out.write(bytes); } } int code = c.getResponseCode(); InputStream stream = code >= 400 ? c.getErrorStream() : c.getInputStream(); String text = read(stream); c.disconnect(); JSONObject result = new JSONObject(text.isEmpty() ? "{}" : text); if (code >= 400) throw new IOException(result.optString("error", "HTTP " + code)); return result; }
 	private JSONObject relayRequest(JSONObject command) throws Exception {
 		if (!anywhere || relayInstallation.isEmpty() || relayEncryptionKey.isEmpty() || relayDeviceToken.isEmpty()) throw new IOException("El acceso remoto no está configurado.");

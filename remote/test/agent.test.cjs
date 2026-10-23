@@ -10,6 +10,7 @@ const os = require("node:os");
 const path = require("node:path");
 const { createRelay } = require("./fake-relay.cjs");
 const { Phone } = require("./phone.cjs");
+const { humanRrule } = require("../agent.cjs");
 
 const RELAY_PORT = 18910, AGENT_PORT = 18911;
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), "c2remote-"));
@@ -26,6 +27,13 @@ test.before(async () => {
   await new Promise((r) => relay.server.listen(RELAY_PORT, "127.0.0.1", r));
   fs.mkdirSync(path.join(TMP, "codex-home"), { recursive: true });
   fs.writeFileSync(path.join(TMP, "codex-home", "hub-token"), TOKEN);
+  const adir = path.join(TMP, "codex-home", "automations");
+  for (const [id, name, rr, st] of [["a-tarde", "Publicar tarde", "RRULE:FREQ=DAILY;BYHOUR=15,21;BYMINUTE=0;BYSECOND=0", "ACTIVE"], ["a-lunes", "Resumen semanal", "RRULE:FREQ=WEEKLY;BYDAY=MO,WE;BYHOUR=9;BYMINUTE=30", "PAUSED"]]) {
+    fs.mkdirSync(path.join(adir, id), { recursive: true });
+    fs.writeFileSync(path.join(adir, id, "automation.toml"), `version = 1\nid = "${id}"\nkind = "heartbeat"\nname = "${name}"\nstatus = "${st}"\nrrule = "${rr}"\nmodel = "m-a"\nreasoning_effort = "high"\ntarget_thread_id = "t-alpha"\n`);
+  }
+  fs.mkdirSync(path.join(TMP, "codex-home", "sqlite"), { recursive: true });
+  cp.spawnSync("python3", ["-I", "-c", "import sqlite3,sys;c=sqlite3.connect(sys.argv[1]);c.execute('create table automations(id text,status text,next_run_at integer,last_run_at integer)');c.execute(\"insert into automations values('a-tarde','ACTIVE',2000000000000,1999999000000)\");c.execute(\"insert into automations values('a-lunes','PAUSED',1900000000000,null)\");c.commit()", path.join(TMP, "codex-home", "sqlite", "codex-dev.db")]);
   agent = cp.spawn(process.execPath, [path.join(__dirname, "..", "agent.cjs")], {
     env: { ...process.env, CODEX_HOME: path.join(TMP, "codex-home"), HOME: TMP, CHATGPT2_REMOTE_PORT: String(AGENT_PORT), CHATGPT2_CODEX_BIN: path.join(__dirname, "fake-codex.cjs"),
       CHATGPT2_REMOTE_ALLOW_LOOPBACK: "1", CHATGPT2_REMOTE_POLL_FAST_MS: "60", CHATGPT2_REMOTE_POLL_IDLE_MS: "60" }, stdio: "ignore" });
@@ -146,6 +154,54 @@ test("enviar con modelo y esfuerzo elegidos desde el teléfono, texto parcial y 
   const s2 = await phone.ask({ type: "send", workspaceId: ws.id, sessionId: "t-alpha", text: "fin", model: "m-b", effort: "high" });
   for (let i = 0; i < 40; i++) { st = (await phone.ask({ type: "job", jobId: s2.jobId })).status; if (st.status !== "running") break; await new Promise((r) => setTimeout(r, 50)); }
   assert.equal(st.result, "Respuesta a: fin [m-b] {high}");
+});
+
+test("automatizaciones: lista con horario legible, estado y próxima ejecución", async () => {
+  const r = await phone.ask({ type: "automations" });
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.automations.map((x) => x.id), ["a-lunes", "a-tarde"]);                 // orden: la que toca antes primero
+  const t = r.automations.find((x) => x.id === "a-tarde"), l = r.automations.find((x) => x.id === "a-lunes");
+  assert.equal(t.schedule, "Todos los días a las 15:00 y 21:00"); assert.equal(t.status, "ACTIVE");
+  assert.equal(t.nextRunAt, 2000000000000); assert.equal(t.lastRunAt, 1999999000000); assert.equal(t.threadId, "t-alpha"); assert.equal(t.model, "m-a");
+  assert.equal(l.schedule, "Cada lunes y miércoles a las 09:30"); assert.equal(l.status, "PAUSED");   // el estado lo manda la base de la app
+  assert.equal(typeof r.now, "number");
+});
+
+test("humanRrule: formas habituales", () => {
+  assert.equal(humanRrule("RRULE:FREQ=HOURLY;INTERVAL=24;BYMINUTE=0"), "Cada 24 horas");
+  assert.equal(humanRrule("FREQ=DAILY;BYHOUR=8"), "Todos los días a las 08:00");
+  assert.equal(humanRrule("FREQ=MINUTELY;INTERVAL=30"), "Cada 30 minutos");
+  assert.equal(humanRrule("FREQ=WEEKLY;BYDAY=FR;BYHOUR=18;BYMINUTE=15"), "Cada viernes a las 18:15");
+  assert.equal(humanRrule("FREQ=YEARLY"), "FREQ=YEARLY");
+});
+
+test("subir archivos por trozos y enviarlos con el mensaje (imagen y archivo)", async () => {
+  const ws = (await phone.ask({ type: "status" })).workspaces.find((w) => w.name === "web");
+  const up = async (id, name, buf, chunk) => { const total = Math.ceil(buf.length / chunk); let last; for (let i = 0; i < total; i++) last = await phone.ask({ type: "upload", uploadId: id, name, index: i, total, data: buf.subarray(i * chunk, (i + 1) * chunk).toString("base64") }); return last; };
+  const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGD4DwABBAEAHnOcXwAAAABJRU5ErkJggg==", "base64");
+  const txt = Buffer.from("hola archivo ".repeat(300));
+  const r1 = await up("img00001", "foto 1.png", png, 40); assert.equal(r1.done, true); assert.equal(r1.size, png.length);
+  const r2 = await up("doc00001", "../../notas.txt", txt, 1000); assert.equal(r2.name, "notas.txt");              // el nombre se sanea
+  const s = await phone.ask({ type: "send", workspaceId: ws.id, sessionId: "t-alpha", text: "mira esto", attachments: [{ id: "img00001" }, { id: "doc00001" }] });
+  assert.equal(s.ok, true, JSON.stringify(s));
+  let st; for (let i = 0; i < 40; i++) { st = (await phone.ask({ type: "job", jobId: s.jobId })).status; if (st.status !== "running") break; await new Promise((r) => setTimeout(r, 50)); }
+  assert.match(st.result, /^Respuesta a: mira esto.*<localImage,mention>$/);                                       // imagen → localImage, archivo → mention
+  assert.equal((await phone.ask({ type: "send", workspaceId: ws.id, sessionId: "t-alpha", text: "x", attachments: [{ id: "noexiste1" }] })).ok, false);
+  assert.equal((await phone.ask({ type: "upload", uploadId: "mal", name: "a", index: 0, total: 1, data: "AA==" })).ok, false);   // id inválido
+});
+
+test("leer archivos: por trozos dentro de zonas permitidas; fuera de ellas, no", async () => {
+  const up = path.join(TMP, "codex-home", "remote", "uploads", "doc00001", "notas.txt");
+  const a = await phone.ask({ type: "file", path: up, offset: 0, length: 1000 });
+  assert.equal(a.ok, true); assert.equal(a.name, "notas.txt"); assert.equal(a.mime, "text/plain"); assert.equal(a.done, false); assert.equal(a.size, 3900);
+  const b = await phone.ask({ type: "file", path: up, offset: 1000, length: 5000 });
+  assert.equal(b.done, true); assert.equal(Buffer.concat([Buffer.from(a.data, "base64"), Buffer.from(b.data, "base64")]).toString(), "hola archivo ".repeat(300).slice(0, 1000 + Buffer.from(b.data, "base64").length));
+  for (const bad of ["/etc/passwd", path.join(os.homedir(), ".ssh", "id_rsa"), "relativo.txt", up + "/../../../../../../etc/passwd"]) {
+    const r = await phone.ask({ type: "file", path: bad }); assert.equal(r.ok, false, bad);
+  }
+  const link = path.join(TMP, "codex-home", "remote", "uploads", "doc00001", "escape.txt");
+  fs.symlinkSync("/etc/hostname", link);
+  assert.equal((await phone.ask({ type: "file", path: link })).ok, false);                                       // un enlace simbólico no saca de la zona
 });
 
 test("dispositivos: se listan y se pueden revocar", async () => {

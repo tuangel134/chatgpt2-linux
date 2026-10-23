@@ -29,6 +29,12 @@ const PORT = Number(process.env.CHATGPT2_REMOTE_PORT || 8324);
 const POLL_FAST_MS = Number(process.env.CHATGPT2_REMOTE_POLL_FAST_MS || 1200);
 const POLL_IDLE_MS = Number(process.env.CHATGPT2_REMOTE_POLL_IDLE_MS || 5000);
 const PERMISSIONS = ["read-only", "workspace-write", "danger-full-access"];
+const UPLOADS = path.join(DIR, "uploads");
+const MAX_FILE = 40 * 1024 * 1024, MAX_CHUNK = 1_200_000;  // por archivo / por trozo (el relay admite 8 MB por paquete cifrado)
+const IMAGE_EXT = /\.(png|jpe?g|gif|webp|bmp)$/i;
+const MIME = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp", bmp: "image/bmp", pdf: "application/pdf", txt: "text/plain", md: "text/markdown", json: "application/json", csv: "text/csv", html: "text/html", zip: "application/zip", mp3: "audio/mpeg", mp4: "video/mp4" };
+const mimeOf = (f) => MIME[path.extname(f).slice(1).toLowerCase()] || "application/octet-stream";
+const safeName = (n) => String(n || "archivo").split(/[\\/]/).pop().replace(/[\\/:*?"<>|\u0000-\u001f]+/g, "_").replace(/^\.+/, "").slice(0, 120) || "archivo";
 
 const logLines = [];
 function log(...a) { const l = new Date().toISOString().slice(11, 19) + " " + a.join(" "); logLines.push(l); if (logLines.length > 80) logLines.shift(); if (process.env.CHATGPT2_REMOTE_DEBUG) console.error(l); }
@@ -218,7 +224,7 @@ const AMBIENT = /<in-app-browser-context[\s\S]*?<\/in-app-browser-context>\s*/g;
 function userText(content) {
   const t = (Array.isArray(content) ? content : []).filter((c) => c && c.type === "text").map((c) => c.text).join("\n");
   const i = t.lastIndexOf("## My request:");
-  return (i >= 0 ? t.slice(i + "## My request:".length) : t).replace(AMBIENT, "").trim();
+  return (i >= 0 ? t.slice(i + "## My request:".length) : t).replace(AMBIENT, "").replace(/\n*\[Archivos adjuntos\][\s\S]*$/, "").trim();
 }
 function title(t) { return String(t.name || t.preview || "Conversación").replace(/\s+/g, " ").trim().slice(0, 70) || "Conversación"; }
 
@@ -256,7 +262,12 @@ async function messages(workspaceId, sessionId, limit) {
   const out = [];
   const part = (t) => ({ message: { parts: [{ type: "text", text: t }] } });
   for (const turn of turns) for (const item of turn.items || []) {
-    if (item.type === "userMessage") { const t = userText(item.content); if (t) out.push({ role: "user", ...part(t) }); }
+    if (item.type === "userMessage") {
+      const t = userText(item.content);
+      const files = (Array.isArray(item.content) ? item.content : []).filter((c) => c && (c.type === "localImage" || c.type === "mention") && typeof c.path === "string").map((c) => ({ path: c.path, name: c.name || path.basename(c.path), image: c.type === "localImage" || IMAGE_EXT.test(c.path) }));
+      if (t || files.length) out.push({ role: "user", ...part(t), ...(files.length ? { files } : {}) });
+    }
+    else if (item.type === "imageGeneration" && item.savedPath) out.push({ role: "tool", kind: "image", status: item.status || "", ...part(path.basename(String(item.savedPath))), files: [{ path: String(item.savedPath), name: path.basename(String(item.savedPath)), image: true }] });
     else if (item.type === "agentMessage" && item.text) out.push({ role: "assistant", ...part(item.text) });
     else { const a = activityOf(item); if (a) out.push({ role: "tool", kind: a.kind, status: a.status, exitCode: item.exitCode, ...part(a.text) }); }
   }
@@ -277,7 +288,7 @@ async function ensureLoaded(threadId) {
   loaded.add(threadId);
 }
 
-async function start(workspaceId, sessionId, text, model, effort) {
+async function start(workspaceId, sessionId, text, model, effort, attachments) {
   model = (typeof model === "string" && model.trim()) || settings.model || "";
   const root = await rootOf(workspaceId);
   let threadId = sessionId;
@@ -288,7 +299,11 @@ async function start(workspaceId, sessionId, text, model, effort) {
     const t = await codex.call("thread/start", { cwd: root, approvalPolicy: "never", sandbox: settings.permission, ...(model ? { model } : {}) });
     threadId = t.thread.id; loaded.add(threadId);
   }
-  const r = await codex.call("turn/start", { threadId, input: [{ type: "text", text, text_elements: [] }], approvalPolicy: "never", ...(model ? { model } : {}), ...(typeof effort === "string" && /^[a-z]{3,10}$/.test(effort) ? { effort } : {}) });
+  const input = [], files = [];
+  for (const a of Array.isArray(attachments) ? attachments.slice(0, 8) : []) { const f = uploadedFile(a && a.id); files.push(f); input.push(IMAGE_EXT.test(f.path) ? { type: "localImage", path: f.path } : { type: "mention", name: f.name, path: f.path }); }
+  const full = files.length ? `${text}\n\n[Archivos adjuntos]\n${files.map((f) => `- ${f.name}: ${f.path}`).join("\n")}` : text;
+  input.unshift({ type: "text", text: full, text_elements: [] });
+  const r = await codex.call("turn/start", { threadId, input, approvalPolicy: "never", ...(model ? { model } : {}), ...(typeof effort === "string" && /^[a-z]{3,10}$/.test(effort) ? { effort } : {}) });
   const jobId = crypto.randomUUID();
   jobs.set(jobId, { threadId, turnId: r.turn.id, status: "running", error: "", sessionId: threadId, text: "", partial: "", itemId: "", activity: [], at: Date.now() });
   for (const [k, j] of jobs) if (j.status !== "running" && Date.now() - j.at > 3600_000) jobs.delete(k);
@@ -304,6 +319,97 @@ function job(jobId) {
   const j = jobs.get(jobId);
   if (!j) return { status: "error", error: "No encuentro esa tarea (¿se reinició el agente?)." };
   return { status: j.status, sessionId: j.sessionId, error: j.error || undefined, result: j.text || undefined, partial: j.partial || undefined, activity: j.activity.length ? j.activity : undefined };
+}
+
+// ------------------------------------------------------------------ archivos que sube el teléfono
+function uploadChunk(c) {
+  const id = String(c.uploadId || ""), index = Number(c.index), total = Number(c.total);
+  if (!/^[A-Za-z0-9_-]{8,64}$/.test(id) || !Number.isInteger(index) || !Number.isInteger(total) || index < 0 || total < 1 || index >= total || total > 80) throw new Error("Trozo de archivo no válido.");
+  const data = Buffer.from(String(c.data || ""), "base64");
+  if (!data.length || data.length > MAX_CHUNK) throw new Error("Trozo de archivo demasiado grande.");
+  const dir = path.join(UPLOADS, id); fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const part = path.join(dir, ".partial"), meta = path.join(dir, ".meta.json");
+  if (index === 0) { fs.rmSync(part, { force: true }); fs.writeFileSync(meta, JSON.stringify({ name: safeName(c.name), total })); }
+  const m = readJson(meta, null); if (!m) throw new Error("Subida desconocida.");
+  const have = fs.existsSync(part) ? fs.statSync(part).size : 0;
+  if (index > 0 && have === 0) throw new Error("Falta el principio del archivo.");
+  if (have + data.length > MAX_FILE) { fs.rmSync(dir, { recursive: true, force: true }); throw new Error("El archivo supera los 40 MB."); }
+  fs.appendFileSync(part, data, { mode: 0o600 });
+  if (index === total - 1) { const final = path.join(dir, m.name); fs.renameSync(part, final); fs.chmodSync(final, 0o600); return { done: true, name: m.name, size: fs.statSync(final).size }; }
+  return { done: false };
+}
+function uploadedFile(id) {
+  if (!/^[A-Za-z0-9_-]{8,64}$/.test(String(id))) throw new Error("Adjunto no válido.");
+  const dir = path.join(UPLOADS, String(id)), m = readJson(path.join(dir, ".meta.json"), null);
+  const f = m && path.join(dir, m.name);
+  if (!f || !fs.existsSync(f)) throw new Error("El adjunto no llegó completo; vuelve a subirlo.");
+  return { path: f, name: m.name };
+}
+function cleanUploads() { try { for (const d of fs.readdirSync(UPLOADS)) { const p = path.join(UPLOADS, d); if (Date.now() - fs.statSync(p).mtimeMs > 7 * 86400_000) fs.rmSync(p, { recursive: true, force: true }); } } catch {} }
+
+// ------------------------------------------------------------------ archivos que ve el teléfono (solo dentro de zonas permitidas)
+async function allowedRoots() {
+  const roots = [path.join(CODEX_HOME, "generated_images"), UPLOADS];
+  try { for (const w of await workspaces()) roots.push(w.root); } catch {}
+  return roots.map((r) => { try { return fs.realpathSync(r); } catch { return null; } }).filter(Boolean);
+}
+async function readFileChunk(p, offset, length) {
+  const file = String(p || "");
+  if (!path.isAbsolute(file) || file.includes("\u0000")) throw new Error("Ruta no permitida.");
+  let real; try { real = fs.realpathSync(file); } catch { throw new Error("No encuentro ese archivo."); }
+  const roots = await allowedRoots();
+  if (!roots.some((r) => real === r || real.startsWith(r + path.sep))) throw new Error("Ese archivo está fuera de las carpetas de tus proyectos.");
+  const st = fs.statSync(real); if (!st.isFile()) throw new Error("No es un archivo.");
+  if (st.size > MAX_FILE) throw new Error("El archivo supera los 40 MB.");
+  const off = Math.max(0, Number(offset) || 0), len = Math.min(MAX_CHUNK - 1000, Math.max(1, Number(length) || 600_000));
+  const fd = fs.openSync(real, "r"); const buf = Buffer.alloc(Math.min(len, Math.max(0, st.size - off)));
+  try { fs.readSync(fd, buf, 0, buf.length, off); } finally { fs.closeSync(fd); }
+  return { name: path.basename(real), size: st.size, mime: mimeOf(real), offset: off, data: buf.toString("base64"), done: off + buf.length >= st.size };
+}
+
+// ------------------------------------------------------------------ automatizaciones (las mismas de la app de escritorio)
+function parseToml(text) {
+  const out = {};
+  for (const line of text.split("\n")) {
+    const m = /^([A-Za-z_][\w-]*)\s*=\s*(.+?)\s*$/.exec(line); if (!m) continue;
+    let v = m[2];
+    if (/^"/.test(v)) { try { v = JSON.parse(v); } catch { v = v.slice(1, -1); } } else if (/^-?\d+$/.test(v)) v = Number(v); else if (v === "true" || v === "false") v = v === "true";
+    out[m[1]] = v;
+  }
+  return out;
+}
+const DAYS = { MO: "lunes", TU: "martes", WE: "miércoles", TH: "jueves", FR: "viernes", SA: "sábado", SU: "domingo" };
+function humanRrule(rr) {
+  const r = {}; for (const kv of String(rr || "").replace(/^RRULE:/, "").split(";")) { const [k, v] = kv.split("="); if (k) r[k] = v; }
+  const hours = (r.BYHOUR || "").split(",").filter(Boolean).map(Number), min = Number(r.BYMINUTE || 0), iv = Number(r.INTERVAL || 1);
+  const hh = (h) => String(h).padStart(2, "0") + ":" + String(min).padStart(2, "0");
+  const list = (a) => (a.length > 1 ? a.slice(0, -1).join(", ") + " y " + a.at(-1) : a[0] || "");
+  const days = (r.BYDAY || "").split(",").filter(Boolean).map((d) => DAYS[d.replace(/^[-+]?\d+/, "")]).filter(Boolean);
+  if (r.FREQ === "DAILY") return (iv > 1 ? `Cada ${iv} días` : "Todos los días") + (hours.length ? " a las " + list(hours.map(hh)) : "");
+  if (r.FREQ === "WEEKLY") return (days.length ? "Cada " + list(days) : iv > 1 ? `Cada ${iv} semanas` : "Cada semana") + (hours.length ? " a las " + list(hours.map(hh)) : "");
+  if (r.FREQ === "HOURLY") return iv > 1 ? `Cada ${iv} horas` : "Cada hora";
+  if (r.FREQ === "MINUTELY") return `Cada ${iv} minutos`;
+  if (r.FREQ === "MONTHLY") return (iv > 1 ? `Cada ${iv} meses` : "Cada mes") + (hours.length ? " a las " + list(hours.map(hh)) : "");
+  return String(rr || "");
+}
+function runtimeState() {  // próxima/última ejecución que calcula la app de escritorio (su base de datos, solo lectura)
+  const db = path.join(CODEX_HOME, "sqlite", "codex-dev.db");
+  if (!fs.existsSync(db)) return {};
+  const py = "import sqlite3,json,sys\nc=sqlite3.connect('file:'+sys.argv[1]+'?mode=ro',uri=True,timeout=3)\nprint(json.dumps({r[0]:{'status':r[1],'next':r[2],'last':r[3]} for r in c.execute('select id,status,next_run_at,last_run_at from automations')}))";
+  const r = cp.spawnSync("python3", ["-I", "-c", py, db], { timeout: 8000, encoding: "utf8" });
+  try { return JSON.parse(r.stdout || "{}"); } catch { return {}; }
+}
+function automations() {
+  const dir = path.join(CODEX_HOME, "automations"), rt = runtimeState(), out = [];
+  let names = []; try { names = fs.readdirSync(dir); } catch {}
+  for (const n of names) {
+    let t; try { t = parseToml(fs.readFileSync(path.join(dir, n, "automation.toml"), "utf8")); } catch { continue; }
+    if (!t.id) continue;
+    const r = rt[t.id] || {};
+    out.push({ id: t.id, name: String(t.name || t.id), status: String(r.status || t.status || "ACTIVE"), kind: String(t.kind || ""), schedule: humanRrule(t.rrule), rrule: String(t.rrule || ""), nextRunAt: r.next || null, lastRunAt: r.last || null,
+      model: String(t.model || ""), effort: String(t.reasoning_effort || ""), threadId: String(t.target_thread_id || "") });
+  }
+  return out.sort((a, b) => (a.nextRunAt || Infinity) - (b.nextRunAt || Infinity));
 }
 
 function capture() {
@@ -324,11 +430,14 @@ async function handleCommand(c) {
     case "status": return { ok: true, workspaces: await workspaces() };
     case "messages": if (!str("workspaceId") || !str("sessionId")) throw new Error("Faltan workspaceId y sessionId."); return { ok: true, messages: await messages(str("workspaceId"), str("sessionId"), 30) };
     case "send": {
-      const text = str("text").trim();
+      const text = str("text").trim() || (Array.isArray(c.attachments) && c.attachments.length ? "Mira los archivos adjuntos." : "");
       if (!str("workspaceId") || !text) throw new Error("Faltan workspaceId y texto.");
-      return { ok: true, ...(await start(str("workspaceId"), str("sessionId") || undefined, text, c.model, c.effort)) };
+      return { ok: true, ...(await start(str("workspaceId"), str("sessionId") || undefined, text, c.model, c.effort, c.attachments)) };
     }
     case "models": return { ok: true, ...(await models()) };
+    case "automations": return { ok: true, automations: automations(), now: Date.now() };
+    case "upload": return { ok: true, ...uploadChunk(c) };
+    case "file": return { ok: true, ...(await readFileChunk(c.path, c.offset, c.length)) };
     case "cancel": if (!str("sessionId")) throw new Error("Falta sessionId."); return { ok: true, ...(await cancel(str("workspaceId"), str("sessionId"))) };
     case "job": if (!str("jobId")) throw new Error("Falta jobId."); return { ok: true, status: job(str("jobId")) };
     case "screenshot": {
@@ -379,6 +488,7 @@ const server = http.createServer(async (req, res) => {
 
 if (require.main === module) {
   fs.mkdirSync(DIR, { recursive: true, mode: 0o700 });
+  cleanUploads();
   server.on("error", (e) => { console.error("agente remoto:", e.message); process.exit(1); });
   server.listen(PORT, "127.0.0.1", () => {
     if (state) { running = true; lastCommandAt = Date.now(); schedulePoll(); log("reanudado:", state.relayUrl); }
@@ -386,4 +496,4 @@ if (require.main === module) {
   const bye = () => { codex.kill(); process.exit(0); };
   process.on("SIGTERM", bye); process.on("SIGINT", bye);
 }
-module.exports = { handleCommand, startRemote, stopRemote, statusObj, encrypt, decrypt, _setState: (s) => { state = s; }, _jobs: jobs };
+module.exports = { humanRrule, handleCommand, startRemote, stopRemote, statusObj, encrypt, decrypt, _setState: (s) => { state = s; }, _jobs: jobs };

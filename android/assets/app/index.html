@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src http://127.0.0.1:8899">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data: blob:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src http://127.0.0.1:8899">
 <title>ChatGPT 2</title>
 <style>
 :root{--bg:#171717;--side:#0f0f0f;--surface:#212121;--surface2:#2f2f2f;--line:#303030;--text:#ececec;--muted:#9b9b9b;--accent:#10a37f;--red:#ef4444;--amber:#f59e0b}
@@ -27,8 +27,9 @@ button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:poin
 .empty h2{margin:0;color:var(--text);font-size:26px;font-weight:600}
 .empty .logo{width:54px;height:54px;border-radius:50%;background:var(--accent);display:grid;place-items:center;font-weight:800;font-size:26px;color:#fff;margin-bottom:10px}
 .u{display:flex;justify-content:flex-end;margin:14px 0 6px}
-.u div{max-width:84%;background:var(--surface2);padding:9px 14px;border-radius:20px;white-space:pre-wrap;word-break:break-word}
-.u div.clip{opacity:.85}
+.u .ub{max-width:100%;background:var(--surface2);padding:9px 14px;border-radius:20px;white-space:pre-wrap;word-break:break-word}
+.u .uwrap{max-width:84%}
+.u .ub.clip{opacity:.85}
 .a{margin:10px 0 6px;word-break:break-word}
 .a p,.u p{margin:0 0 10px}.a p:last-child{margin-bottom:0}
 .a h1,.a h2,.a h3{font-size:1.05em;margin:14px 0 6px}
@@ -60,6 +61,34 @@ button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:poin
 #send:disabled{background:var(--surface2);opacity:.6}
 #send svg{width:20px;height:20px;stroke:#fff;fill:none;stroke-width:2.4;stroke-linecap:round;stroke-linejoin:round}
 #send.stop{background:#fff}#send.stop svg{stroke:#000;fill:#000}
+/* adjuntos */
+#chips{display:flex;gap:8px;overflow-x:auto;padding:0 4px 8px}#chips:empty{display:none}
+.fchip{display:flex;align-items:center;gap:8px;background:var(--surface);border-radius:14px;padding:6px 10px 6px 6px;flex:0 0 auto;max-width:220px;font-size:13px}
+.fchip img{width:38px;height:38px;border-radius:9px;object-fit:cover}.fchip .ic{width:38px;height:38px;border-radius:9px;background:var(--surface2);display:grid;place-items:center}
+.fchip .t{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.fchip small{display:block;color:var(--muted)}
+.fchip button{color:var(--muted);font-size:18px;padding:0 4px}
+#attach{width:40px;height:40px;border-radius:50%;background:var(--surface2);display:grid;place-items:center;flex:0 0 auto}
+#attach svg{width:20px;height:20px;stroke:var(--text);fill:none;stroke-width:2.2;stroke-linecap:round}
+.att{display:block;margin:8px 0;border-radius:14px;overflow:hidden;background:var(--surface);min-height:56px;max-width:min(100%,380px);color:var(--muted);font-size:13px;padding:14px}
+.att img{display:block;width:100%;height:auto;border-radius:12px}.att.ld{padding:14px}
+.filebtn{display:inline-flex;align-items:center;gap:8px;background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:8px 12px;margin:4px 6px 4px 0;font-size:14px;max-width:100%}
+.filebtn span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.u .files{display:flex;flex-direction:column;gap:6px;align-items:flex-end;margin-bottom:4px}
+.u .files .att{max-width:220px;margin:0}
+.uwrap{display:flex;flex-direction:column;align-items:flex-end}
+/* automatizaciones */
+#autos{position:fixed;inset:0;background:var(--bg);z-index:35;display:none;flex-direction:column;padding-top:env(safe-area-inset-top)}
+#autos.on{display:flex}
+#ah{display:flex;align-items:center;gap:8px;padding:8px 10px}#ah b{flex:1;font-size:19px}
+#alist{flex:1;overflow-y:auto;padding:4px 14px calc(18px + env(safe-area-inset-bottom))}
+.acard{background:var(--surface);border-radius:18px;padding:14px 16px;margin:10px 0}
+.acard h4{margin:0 0 4px;font-size:16px;display:flex;align-items:center;gap:8px}.acard h4 span.n{flex:1;min-width:0}
+.pill{font-size:12px;padding:2px 10px;border-radius:12px;background:#173b30;color:#6ee7b7;flex:0 0 auto}.pill.off{background:#3b2e12;color:#fcd34d}
+.acard .sch{color:var(--muted);font-size:14px}
+.acard .nx{margin:10px 0 4px;font-size:15px}.acard .nx b{font-size:20px;font-weight:700;color:var(--text)}
+.acard .meta{color:var(--muted);font-size:12.5px;display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}.acard .meta span{background:var(--surface2);border-radius:10px;padding:2px 9px}
+.acard button.go{margin-top:10px;background:var(--surface2);border-radius:12px;padding:8px 14px;font-size:14px}
+.asum{color:var(--muted);font-size:14px;padding:2px 4px 6px}
 /* menú lateral */
 #scrim{position:fixed;inset:0;background:rgba(0,0,0,.55);opacity:0;pointer-events:none;transition:opacity .2s;z-index:20}
 #scrim.on{opacity:1;pointer-events:auto}
@@ -112,7 +141,8 @@ button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:poin
     <button class="icon" id="moreBtn" aria-label="Más"><svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="19" cy="12" r="1.2"/></svg></button>
   </div>
   <div id="msgs"></div>
-  <div id="comp"><div id="box">
+  <div id="comp"><div id="chips"></div><div id="box">
+    <button id="attach" aria-label="Adjuntar"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button>
     <textarea id="txt" rows="1" placeholder="Pregunta lo que quieras"></textarea>
     <button id="send" aria-label="Enviar"><svg viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"/></svg></button>
   </div></div>
@@ -122,11 +152,14 @@ button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:poin
   <div id="dh"><b>ChatGPT 2</b><button class="icon" id="closeDrawer" aria-label="Cerrar"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
   <input id="search" placeholder="Buscar conversaciones" autocomplete="off">
   <button id="newchat"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#000" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>Nuevo chat</button>
+  <button class="proj" id="autosBtn" style="margin:0 6px"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg><span class="n">Automatizaciones</span><span class="c" id="autosCount"></span></button>
   <div id="dscroll"></div>
   <div class="dfoot"><button id="refreshBtn">Actualizar</button><button id="shotBtn">Captura del escritorio</button></div>
 </aside>
 <div id="sheet"><h3 id="sheetTitle"></h3><div id="sheetBody"></div></div>
-<div id="shot"><img id="shotImg" alt="Captura"><button id="shotClose">Cerrar</button></div>
+<div id="shot"><img id="shotImg" alt="Captura"><button id="shotSave">Guardar en el teléfono</button><button id="shotClose">Cerrar</button></div>
+<div id="autos"><div id="ah"><button class="icon" id="autosBack" aria-label="Volver"><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button><b>Automatizaciones</b><button class="icon" id="autosRefresh" aria-label="Actualizar"><svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.3-5.7M20 4v5h-5"/></svg></button></div><div id="alist"></div></div>
+<input type="file" id="pickImg" accept="image/*" multiple hidden><input type="file" id="pickFile" multiple hidden>
 <div id="toast"></div>
 <script>
 "use strict";
@@ -149,6 +182,7 @@ const store = { get: (k, d) => { try { const v = localStorage.getItem("c2." + k)
 
 // ---------------------------------------------------------------- estado
 const S = { ws: [], wsId: store.get("wsId", ""), sid: store.get("sid", ""), msgs: [], models: [], defModel: "", model: store.get("model", ""), effort: store.get("effort", ""), job: null, loading: false, err: "", openProj: store.get("openProj", {}) };
+const IMG_RE = /\.(png|jpe?g|gif|webp|bmp)$/i;
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const curWs = () => S.ws.find((w) => w.id === S.wsId);
 const curSession = () => { const w = curWs(); return w && w.sessions.find((x) => x.id === S.sid); };
@@ -163,8 +197,10 @@ function md(src) {
     .replace(/`([^`\n]+)`/g, "<code>$1</code>")
     .replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>")
     .replace(/(^|[\s(])\*([^*\n]+)\*/g, "$1<em>$2</em>")
+    .replace(/!\[([^\]\n]*)\]\((\/[^)\n]+)\)/g, (_, alt, p) => `<span class="att ld" data-img="${p}">🖼 ${alt || "imagen"}</span>`)
     .replace(/!\[([^\]\n]*)\]\([^)\n]*\)/g, "<em>🖼 $1</em>")
     .replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" rel="noopener">$1</a>')
+    .replace(/\[([^\]\n]+)\]\((\/[^)\n#]+)(?:#[^)\n]*)?\)/g, (_, t, p) => IMG_RE.test(p) ? `<span class="att ld" data-img="${p}">🖼 ${t}</span>` : `<button class="filebtn" data-file="${p}" data-name="${t}">📎 <span>${t}</span></button>`)
     .replace(/\[([^\]\n]+)\]\((?!https?:)[^)\n]*\)/g, "<code>$1</code>")
     .replace(/(^|[\s(])(https?:\/\/[^\s<)]+)/g, '$1<a href="$2" rel="noopener">$2</a>');
   const out = []; const lines = t.split("\n"); let list = null, para = [];
@@ -191,16 +227,60 @@ function toolsHtml(items) {
   const bad = items.filter((x) => x.status === "failed" || (typeof x.exitCode === "number" && x.exitCode !== 0)).length;
   return `<details class="tools"><summary>${items.length} acción${items.length === 1 ? "" : "es"}${bad ? ` · ${bad} con error` : ""}</summary>${items.map((x) => `<div class="t${x.status === "failed" || (typeof x.exitCode === "number" && x.exitCode !== 0) ? " err" : ""}"><i>${ICON[x.kind] || "•"}</i><span>${esc(x.text)}</span></div>`).join("")}</details>`;
 }
+// ---- archivos: miniaturas y descargas (la PC solo entrega los de las carpetas de tus proyectos)
+const fileCache = new Map(); const MAXC = 24;
+function b64ToBytes(b) { const bin = atob(b), u = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i); return u; }
+async function fetchFile(path) {
+  if (fileCache.has(path)) return fileCache.get(path);
+  const parts = []; let offset = 0, name = "archivo", mime = "application/octet-stream";
+  for (let n = 0; n < 80; n++) {
+    const r = await call({ type: "file", path, offset, length: 600000 }, 60000);
+    name = r.name; mime = r.mime; const bytes = b64ToBytes(r.data); parts.push(bytes); offset += bytes.length;
+    if (r.done || !bytes.length) break;
+  }
+  const blob = new Blob(parts, { type: mime }); const f = { name, mime, blob, url: URL.createObjectURL(blob) };
+  if (fileCache.size >= MAXC) { const k = fileCache.keys().next().value; URL.revokeObjectURL(fileCache.get(k).url); fileCache.delete(k); }
+  fileCache.set(path, f); return f;
+}
+function filesHtml(files) {
+  return (files || []).map((f) => f.local && f.image ? `<span class="att"><img src="${esc(f.local)}" alt=""></span>` : f.local ? `<span class="filebtn">📎 <span>${esc(f.name)}</span></span>` : f.image || IMG_RE.test(f.path || "") ? `<span class="att ld" data-img="${esc(f.path)}">🖼 ${esc(f.name || "imagen")}</span>` : `<button class="filebtn" data-file="${esc(f.path)}" data-name="${esc(f.name || "archivo")}">📎 <span>${esc(f.name || "archivo")}</span></button>`).join("");
+}
+function bareImages(text) {
+  const seen = new Set(), out = []; const re = /(?:^|[\s(`'"])(\/[^\s)\]'"`<>]+\.(?:png|jpe?g|gif|webp))/gi; let m;
+  while ((m = re.exec(text)) && out.length < 4) if (!seen.has(m[1]) && !text.includes("](" + m[1] + ")")) { seen.add(m[1]); out.push(`<span class="att ld" data-img="${esc(m[1])}">🖼 ${esc(m[1].split("/").pop())}</span>`); }
+  return out.join("");
+}
+async function hydrateImages(root) {
+  for (const el of root.querySelectorAll("[data-img].ld")) {
+    el.classList.remove("ld"); const p = el.dataset.img;
+    fetchFile(p).then((f) => { el.className = "att"; el.innerHTML = ""; const img = document.createElement("img"); img.src = f.url; img.alt = f.name; img.addEventListener("click", () => viewImage(f)); el.appendChild(img); }).catch((e) => { el.textContent = "🖼 " + (e.message || "No disponible"); });
+  }
+}
+let viewing = null;
+function viewImage(f) { viewing = f; $("#shotImg").src = f.url; $("#shot").classList.add("on"); }
+function saveBlob(f) {
+  if (window.Android && window.Android.saveFile) { const r = new FileReader(); r.onload = () => window.Android.saveFile(f.name, f.mime, String(r.result).split(",")[1]); r.readAsDataURL(f.blob); }
+  else { const a = document.createElement("a"); a.href = f.url; a.download = f.name; a.click(); }
+}
+window.__saved = (ok, name) => toast(ok ? "Guardado en Descargas: " + name : "No se pudo guardar " + name, ok);
+$("#shotSave").addEventListener("click", () => { if (viewing) saveBlob(viewing); });
+document.addEventListener("click", async (e) => {
+  const b = e.target.closest("[data-file]"); if (!b) return;
+  b.disabled = true; const old = b.innerHTML; b.querySelector("span").textContent = "Descargando…";
+  try { const f = await fetchFile(b.dataset.file); saveBlob(f); } catch (err) { toast(err.message); }
+  b.disabled = false; b.innerHTML = old;
+});
 function renderMsgs(stick) {
   const el = $("#msgs"); const atBottom = stick || el.scrollHeight - el.scrollTop - el.clientHeight < 90;
   let h = ""; let group = [];
   const flush = () => { if (group.length) { h += toolsHtml(group); group = []; } };
   for (const m of S.msgs) {
     const text = (m.message && m.message.parts || []).map((p) => p.text || "").join("\n");
+    if (m.role === "tool" && m.kind === "image" && m.files) { flush(); h += `<div class="a">${filesHtml(m.files)}</div>`; continue; }
     if (m.role === "tool") { group.push({ kind: m.kind, text, status: m.status, exitCode: m.exitCode }); continue; }
     flush();
-    if (m.role === "user") { const long = text.length > 420; h += `<div class="u"><div${long ? ' class="clip"' : ""}>${esc(long ? text.slice(0, 420) + "…" : text)}</div></div>`; }
-    else h += `<div class="a">${md(text)}</div>`;
+    if (m.role === "user") { const long = text.length > 420; h += `<div class="u"><div class="uwrap">${m.files && m.files.length ? `<div class="files">${filesHtml(m.files)}</div>` : ""}${text || !(m.files && m.files.length) ? `<div class="ub${long ? " clip" : ""}">${esc(long ? text.slice(0, 420) + "…" : text)}</div>` : ""}</div></div>`; }
+    else h += `<div class="a">${md(text)}${bareImages(text)}</div>`;
   }
   flush();
   if (S.job && S.job.running) {
@@ -214,6 +294,7 @@ function renderMsgs(stick) {
     h = `<div class="empty"><div class="logo">2</div><h2>¿Qué quieres hacer?</h2><span>${w ? "Proyecto: <b>" + esc(w.name) + "</b>" : "Abre el menú y elige un proyecto"}</span></div>`;
   }
   el.innerHTML = h;
+  hydrateImages(el);
   if (atBottom) el.scrollTop = el.scrollHeight;
 }
 function paintTop() {
@@ -222,7 +303,7 @@ function paintTop() {
   const w = curWs(), s = curSession();
   $("#modelSub").textContent = (w ? w.name : "") + (s ? " · " + s.title : "") + (S.effort ? " · " + S.effort : "");
 }
-function paintSend() { const b = $("#send"); const run = S.job && S.job.running; b.className = run ? "stop" : ""; b.innerHTML = run ? '<svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>' : '<svg viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"/></svg>'; b.disabled = !run && !$("#txt").value.trim(); }
+function paintSend() { const b = $("#send"); const run = S.job && S.job.running; b.className = run ? "stop" : ""; b.innerHTML = run ? '<svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>' : '<svg viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"/></svg>'; b.disabled = !run && !$("#txt").value.trim() && !pendingFiles.length; }
 
 // ---------------------------------------------------------------- menú lateral
 function paintDrawer() {
@@ -241,7 +322,7 @@ function paintDrawer() {
   h += `<div class="sec">Recientes</div>` + (recent.map(({ s, w }) => chat(s, w, false, true)).join("") || `<div class="chat" style="color:var(--muted)">No hay conversaciones</div>`);
   el.innerHTML = h;
 }
-function drawer(on) { $("#drawer").classList.toggle("on", on); $("#scrim").classList.toggle("on", on); if (on) { paintDrawer(); refreshStatus(); } }
+function drawer(on) { $("#drawer").classList.toggle("on", on); $("#scrim").classList.toggle("on", on); if (on) { paintDrawer(); refreshStatus(); loadAutos(false); } }
 $("#dscroll").addEventListener("click", (e) => {
   const p = e.target.closest("[data-proj]"); if (p) { const id = p.dataset.proj; S.openProj[id] = !S.openProj[id]; store.set("openProj", S.openProj); paintDrawer(); return; }
   const c = e.target.closest("[data-sid]"); if (c) { drawer(false); openSession(c.dataset.ws, c.dataset.sid); }
@@ -281,7 +362,7 @@ async function shot() { toast("Pidiendo captura…", true); try { const r = awai
 $("#shotClose").addEventListener("click", () => $("#shot").classList.remove("on"));
 $("#menuBtn").addEventListener("click", () => drawer(true));
 $("#closeDrawer").addEventListener("click", () => drawer(false));
-window.__back = () => { if ($("#shot").classList.contains("on")) { $("#shot").classList.remove("on"); return true; } if ($("#sheet").classList.contains("on")) { closeSheet(); return true; } if ($("#drawer").classList.contains("on")) { drawer(false); return true; } return false; };
+window.__back = () => { if ($("#autos").classList.contains("on")) { $("#autos").classList.remove("on"); return true; } if ($("#shot").classList.contains("on")) { $("#shot").classList.remove("on"); return true; } if ($("#sheet").classList.contains("on")) { closeSheet(); return true; } if ($("#drawer").classList.contains("on")) { drawer(false); return true; } return false; };
 
 // ---------------------------------------------------------------- datos
 async function refreshStatus() {
@@ -303,16 +384,64 @@ async function openSession(wsId, sid) {
 function newChat(wsId) { if (wsId) { S.wsId = wsId; store.set("wsId", wsId); } S.sid = ""; store.set("sid", ""); S.msgs = []; S.job = null; S.err = ""; paintTop(); renderMsgs(true); paintSend(); $("#txt").focus(); }
 async function reloadAll() { await refreshStatus(); loadModels().catch(() => {}); await loadMessages(true); }
 
+// ---------------------------------------------------------------- adjuntos (se comprimen las fotos y se suben por trozos cifrados)
+const pendingFiles = [];  // {name, blob, mime, image, url, state:'listo'|'subiendo'|'error', id}
+const fmtSize = (n) => (n > 1048576 ? (n / 1048576).toFixed(1) + " MB" : Math.max(1, Math.round(n / 1024)) + " KB");
+async function prepare(file) {
+  let blob = file, name = file.name || "archivo", mime = file.type || "application/octet-stream";
+  if (/^image\/(jpeg|png|webp|heic|heif)/.test(mime) && !/gif/.test(mime)) {
+    try {
+      const bmp = await createImageBitmap(file); const k = Math.min(1, 2048 / Math.max(bmp.width, bmp.height));
+      if (k < 1 || file.size > 1500000) {
+        const c = document.createElement("canvas"); c.width = Math.round(bmp.width * k); c.height = Math.round(bmp.height * k);
+        const g = c.getContext("2d"); g.fillStyle = "#fff"; g.fillRect(0, 0, c.width, c.height); g.drawImage(bmp, 0, 0, c.width, c.height);
+        const out = await new Promise((r) => c.toBlob(r, "image/jpeg", 0.86));
+        if (out && out.size < file.size) { blob = out; mime = "image/jpeg"; name = name.replace(/\.[^.]+$/, "") + ".jpg"; }
+      }
+    } catch (e) { /* si no se puede decodificar (HEIC...), se manda tal cual */ }
+  }
+  return { name, blob, mime, image: mime.startsWith("image/"), url: mime.startsWith("image/") ? URL.createObjectURL(blob) : "", state: "listo", id: "" };
+}
+async function addFiles(list) {
+  for (const f of Array.from(list || [])) {
+    if (pendingFiles.length >= 8) { toast("Máximo 8 archivos por mensaje"); break; }
+    if (f.size > 40 * 1048576) { toast(f.name + " supera los 40 MB"); continue; }
+    pendingFiles.push(await prepare(f));
+  }
+  paintChips();
+}
+function paintChips() {
+  $("#chips").innerHTML = pendingFiles.map((f, i) => `<div class="fchip">${f.image ? `<img src="${f.url}" alt="">` : '<span class="ic">📎</span>'}<span class="t">${esc(f.name)}<small>${f.state === "subiendo" ? "Subiendo…" : f.state === "error" ? "Falló" : fmtSize(f.blob.size)}</small></span><button data-rm="${i}" aria-label="Quitar">✕</button></div>`).join("");
+  paintSend();
+}
+$("#chips").addEventListener("click", (e) => { const b = e.target.closest("[data-rm]"); if (b) { const f = pendingFiles.splice(+b.dataset.rm, 1)[0]; if (f && f.url) URL.revokeObjectURL(f.url); paintChips(); } });
+$("#attach").addEventListener("click", () => sheet("Adjuntar", '<button class="opt" data-k="img">🖼&nbsp; Foto o imagen de la galería</button><button class="opt" data-k="file">📎&nbsp; Archivo (PDF, texto, zip…)</button>', (b) => b.addEventListener("click", (e) => { const o = e.target.closest("[data-k]"); if (!o) return; closeSheet(); setTimeout(() => $(o.dataset.k === "img" ? "#pickImg" : "#pickFile").click(), 150); })));
+for (const id of ["#pickImg", "#pickFile"]) $(id).addEventListener("change", (e) => { addFiles(e.target.files); e.target.value = ""; });
+async function uploadOne(f) {
+  const id = (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(36).slice(2)).replace(/-/g, "").slice(0, 32);
+  const size = f.blob.size, CH = 700000, total = Math.max(1, Math.ceil(size / CH));
+  for (let i = 0; i < total; i++) {
+    const part = f.blob.slice(i * CH, (i + 1) * CH);
+    const data = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result).split(",")[1]); r.onerror = () => rej(new Error("No se pudo leer el archivo")); r.readAsDataURL(part); });
+    await call({ type: "upload", uploadId: id, name: f.name, index: i, total, data }, 70000);
+  }
+  return id;
+}
+
 // ---------------------------------------------------------------- enviar / seguir tarea
 async function send() {
-  const text = $("#txt").value.trim();
+  const text = $("#txt").value.trim(); const files = pendingFiles.slice();
   if (S.job && S.job.running) { try { await call({ type: "cancel", workspaceId: S.wsId, sessionId: S.sid }, 30000); toast("Cancelando…", true); } catch (e) { toast(e.message); } return; }
-  if (!text) return;
+  if (!text && !files.length) return;
   if (!S.wsId) { toast("Elige primero un proyecto en el menú"); return; }
   $("#txt").value = ""; autosize(); S.err = "";
-  S.msgs.push({ role: "user", message: { parts: [{ type: "text", text }] } }); S.job = { running: true, partial: "", activity: [] }; renderMsgs(true); paintSend();
+  S.msgs.push({ role: "user", message: { parts: [{ type: "text", text }] }, files: files.map((f) => ({ path: "", name: f.name, image: f.image, local: f.url })) });
+  S.job = { running: true, partial: "", activity: [], uploading: files.length > 0 }; renderMsgs(true); paintSend();
   try {
-    const r = await call({ type: "send", workspaceId: S.wsId, sessionId: S.sid || undefined, text, ...(S.model ? { model: S.model } : {}), ...(S.effort ? { effort: S.effort } : {}) }, 60000);
+    const attachments = [];
+    for (const f of files) { f.state = "subiendo"; paintChips(); try { attachments.push({ id: await uploadOne(f) }); } catch (e) { f.state = "error"; paintChips(); throw new Error("No se pudo subir " + f.name + ": " + e.message); } }
+    pendingFiles.length = 0; paintChips();
+    const r = await call({ type: "send", workspaceId: S.wsId, sessionId: S.sid || undefined, text, ...(attachments.length ? { attachments } : {}), ...(S.model ? { model: S.model } : {}), ...(S.effort ? { effort: S.effort } : {}) }, 60000);
     S.sid = r.sessionId; store.set("sid", S.sid); S.job.id = r.jobId; paintTop(); follow(r.jobId, S.sid);
   } catch (e) { S.job = null; S.err = e.message; renderMsgs(true); paintSend(); }
 }
@@ -336,12 +465,56 @@ const autosize = () => { const t = $("#txt"); t.style.height = "auto"; t.style.h
 $("#txt").addEventListener("input", autosize);
 $("#send").addEventListener("click", send);
 
+// ---------------------------------------------------------------- automatizaciones
+const AU = { list: [], skew: 0 };
+function dur(ms) { const s = Math.max(0, Math.round(ms / 1000)), d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60); return d ? `${d} d ${h} h` : h ? `${h} h ${m} min` : m ? `${m} min` : "menos de 1 min"; }
+function pcNow() { return Date.now() + AU.skew; }
+function whenText(t) {
+  const d = new Date(t), now = new Date(pcNow()), tom = new Date(pcNow() + 86400000), same = (a, b) => a.toDateString() === b.toDateString();
+  const hm = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  return same(d, now) ? `hoy a las ${hm}` : same(d, tom) ? `mañana a las ${hm}` : d.toLocaleDateString([], { weekday: "long", day: "numeric", month: "short" }) + ` a las ${hm}`;
+}
+function paintAutos() {
+  const el = $("#alist"); const act = AU.list.filter((a) => a.status === "ACTIVE");
+  const next = act.filter((a) => a.nextRunAt).sort((a, b) => a.nextRunAt - b.nextRunAt)[0];
+  $("#autosCount").textContent = AU.list.length ? (next ? "en " + dur(next.nextRunAt - pcNow()) : String(AU.list.length)) : "";
+  if (!$("#autos").classList.contains("on")) return;
+  if (!AU.list.length) { el.innerHTML = '<div class="empty" style="height:60%"><h2>Sin automatizaciones</h2><span>Las que crees en ChatGPT 2 aparecen aquí con el tiempo que les queda.</span></div>'; return; }
+  let h = `<div class="asum">${act.length} activa${act.length === 1 ? "" : "s"} de ${AU.list.length}${next ? " · la próxima en " + dur(next.nextRunAt - pcNow()) : ""}</div>`;
+  for (const a of AU.list) {
+    const on = a.status === "ACTIVE", left = a.nextRunAt ? a.nextRunAt - pcNow() : null;
+    h += `<div class="acard"><h4><span class="n">${esc(a.name)}</span><span class="pill${on ? "" : " off"}">${on ? "Activa" : a.status === "PAUSED" ? "En pausa" : esc(a.status)}</span></h4><div class="sch">${esc(a.schedule)}</div>`;
+    if (!on) h += '<div class="nx">En pausa: no se ejecutará hasta reanudarla.</div>';
+    else if (left === null) h += '<div class="nx">Sin próxima ejecución programada.</div>';
+    else if (left <= 0) h += '<div class="nx"><b>Ahora</b> · toca ejecutarse o ya está en marcha</div>';
+    else h += `<div class="nx">Le quedan <b>${dur(left)}</b></div><div class="sch">Próxima: ${whenText(a.nextRunAt)}</div>`;
+    h += `<div class="meta">${a.lastRunAt ? `<span>Última: hace ${dur(pcNow() - a.lastRunAt)}</span>` : "<span>Aún sin ejecutar</span>"}${a.model ? `<span>${esc(a.model)}</span>` : ""}${a.effort ? `<span>razonamiento ${esc(a.effort)}</span>` : ""}</div>`;
+    if (a.threadId) h += `<button class="go" data-th="${esc(a.threadId)}">Abrir su conversación</button>`;
+    h += "</div>";
+  }
+  el.innerHTML = h;
+}
+async function loadAutos(show) {
+  try { const r = await call({ type: "automations" }, 40000); AU.list = r.automations || []; AU.skew = (r.now || Date.now()) - Date.now(); paintAutos(); }
+  catch (e) { if (show) toast("No se pudieron leer las automatizaciones: " + e.message); }
+}
+function openAutos() { drawer(false); $("#autos").classList.add("on"); paintAutos(); loadAutos(true); }
+$("#autosBtn").addEventListener("click", openAutos);
+$("#autosBack").addEventListener("click", () => $("#autos").classList.remove("on"));
+$("#autosRefresh").addEventListener("click", () => { toast("Actualizando…", true); loadAutos(true); });
+$("#alist").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-th]"); if (!b) return; const w = S.ws.find((x) => x.sessions.some((s) => s.id === b.dataset.th));
+  if (!w) { toast("No encuentro esa conversación en tus proyectos"); return; }
+  $("#autos").classList.remove("on"); openSession(w.id, b.dataset.th);
+});
+setInterval(() => { if ($("#autos").classList.contains("on")) paintAutos(); }, 20000);
+
 // ---------------------------------------------------------------- arranque
 (async function init() {
   paintSend(); renderMsgs(true); setConn("");
   const ok = await refreshStatus();
   if (!ok) { S.err = "No se pudo hablar con la PC. Comprueba que ChatGPT 2 sigue encendido y con el control remoto activo."; renderMsgs(true); return; }
-  loadModels().catch(() => {});
+  loadModels().catch(() => {}); loadAutos(false);
   const w = curWs();
   if (w && S.sid && w.sessions.some((s) => s.id === S.sid)) await openSession(S.wsId, S.sid);
   else if (w && w.sessions[0]) await openSession(w.id, w.sessions[0].id);
