@@ -134,7 +134,7 @@ public final class MainActivity extends Activity {
         projectName = label("CHATGPT 2 REMOTE  ▾", 16, TEXT); projectName.setTypeface(Typeface.DEFAULT, Typeface.BOLD); projectName.setOnClickListener(v -> chooseProject()); heading.addView(projectName);
         status = label("Controla tu espacio de trabajo", 12, MUTED); heading.addView(status); header.addView(heading, weight());
         connectionDot = label("●", 16, MUTED); connectionDot.setGravity(Gravity.CENTER); header.addView(connectionDot, new LinearLayout.LayoutParams(dp(28), dp(38)));
-        ImageButton browser = new ImageButton(this); browser.setImageResource(android.R.drawable.ic_menu_view); browser.setColorFilter(TEXT); browser.setBackgroundColor(Color.TRANSPARENT); browser.setContentDescription("Navegador ChatGPT y Perplexity"); browser.setOnClickListener(v -> openBrowserChooser()); header.addView(browser, new LinearLayout.LayoutParams(dp(42), dp(42)));
+        ImageButton browser = new ImageButton(this); browser.setImageResource(android.R.drawable.ic_menu_view); browser.setColorFilter(TEXT); browser.setBackgroundColor(Color.TRANSPARENT); browser.setContentDescription("Navegador ChatGPT y Perplexity"); browser.setOnClickListener(v -> openBrowserChooser()); 
         ImageButton menu = new ImageButton(this); menu.setImageResource(android.R.drawable.ic_menu_more); menu.setColorFilter(TEXT); menu.setBackgroundColor(Color.TRANSPARENT); menu.setContentDescription("Acciones de ChatGPT 2"); menu.setOnClickListener(v -> showControls()); header.addView(menu, new LinearLayout.LayoutParams(dp(42), dp(42)));
         root.addView(header, fill());
 
@@ -156,8 +156,7 @@ public final class MainActivity extends Activity {
         composerShell = new LinearLayout(this); composerShell.setOrientation(LinearLayout.VERTICAL); composerShell.setPadding(dp(12), dp(8), dp(8), dp(8)); composerShell.setBackground(card(SURFACE, 14));
         composer = input("Pídele algo a ChatGPT 2…"); composer.setMinLines(1); composer.setMaxLines(4); composer.setGravity(Gravity.TOP | Gravity.START); composer.setBackgroundColor(Color.TRANSPARENT); composer.setOnFocusChangeListener((view, focused) -> { if (focused) chatScroll.post(() -> chatScroll.fullScroll(View.FOCUS_DOWN)); }); composer.setOnClickListener(view -> chatScroll.post(() -> chatScroll.fullScroll(View.FOCUS_DOWN))); composerShell.addView(composer, fill());
         LinearLayout actions = row(); actions.setPadding(0, dp(4), 0, 0);
-        TextView hint = label("Enter para enviar", 11, MUTED); actions.addView(hint, weight());
-        Spinner agentPicker = new Spinner(this); String[] agentChoices = {"ChatGPT 2", "Codex · suscripción", "Claude · suscripción"}; ArrayAdapter<String> agentAdapter = new ArrayAdapter<String>(this, android.R.layout.simple_spinner_dropdown_item, agentChoices); agentPicker.setAdapter(agentAdapter); agentPicker.setSelection(externalAgent.equals("codex") ? 1 : externalAgent.equals("claude") ? 2 : 0); agentPicker.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener() { public void onNothingSelected(android.widget.AdapterView<?> parent) {} public void onItemSelected(android.widget.AdapterView<?> parent, View view, int position, long id) { externalAgent = position == 1 ? "codex" : position == 2 ? "claude" : ""; getPreferences(MODE_PRIVATE).edit().putString("externalAgent", externalAgent).apply(); } }); actions.addView(agentPicker, new LinearLayout.LayoutParams(dp(132), dp(40)));
+        actions.addView(new View(this), weight());
         Button capture = quietButton("Captura"); capture.setOnClickListener(v -> capture()); actions.addView(capture);
         Button send = accentButton("Enviar ↑"); send.setOnClickListener(v -> send()); actions.addView(send);
         composerShell.addView(actions, fill()); root.addView(composerShell, fill());
@@ -551,7 +550,7 @@ public final class MainActivity extends Activity {
     private void showControls() {
         if (!connected() || !appUnlocked) { setStatus("Desbloquea y conecta ChatGPT 2 para usar sus controles."); return; }
         String title = workspaceName.isEmpty() ? "ChatGPT 2 Remote" : workspaceName;
-	String[] actions = { "Cambiar proyecto", "Cambiar conversación", "Nueva conversación", "Actualizar chat", "Detener tarea actual", "Capturar escritorio", "Navegador de la PC", "Navegador en este teléfono", "Desemparejar teléfono" };
+	String[] actions = { "Cambiar proyecto", "Cambiar conversación", "Nueva conversación", "Actualizar chat", "Detener tarea actual", "Capturar escritorio", "Desemparejar teléfono" };
         new AlertDialog.Builder(this).setTitle(title).setItems(actions, (dialog, which) -> {
             if (which == 0) chooseProject();
             else if (which == 1) chooseSession();
@@ -559,9 +558,7 @@ public final class MainActivity extends Activity {
             else if (which == 3) refresh();
 			else if (which == 4) cancelTurn();
 			else if (which == 5) capture();
-			else if (which == 6) openRemoteBrowser();
-			else if (which == 7) openLocalBrowser();
-			else if (which == 8) clearPairing();
+			else if (which == 6) clearPairing();
         }).setNegativeButton("Cerrar", null).show();
     }
 
@@ -670,7 +667,7 @@ public final class MainActivity extends Activity {
     private HttpURLConnection connection(String address, String method, String bearer) throws Exception { validateEndpoint(address, false); HttpURLConnection c = (HttpURLConnection) new URL(address).openConnection(); c.setInstanceFollowRedirects(false); c.setRequestMethod(method); c.setConnectTimeout(8000); c.setReadTimeout(180000); c.setRequestProperty("Content-Type", "application/json"); if (!bearer.isEmpty()) c.setRequestProperty("Authorization", "Bearer " + bearer); return c; }
     private HttpURLConnection relayConnection(String address) throws Exception { HttpURLConnection c = connection(address, "POST", ""); c.setConnectTimeout(10000); c.setReadTimeout(30000); c.setRequestProperty("X-Forja-Device", "android"); c.setRequestProperty("X-Forja-Device-Token", relayDeviceToken); return c; }
     private HttpURLConnection pairingConnection(String address) throws Exception { HttpURLConnection c = connection(address, "POST", ""); c.setConnectTimeout(10000); c.setReadTimeout(30000); c.setRequestProperty("X-Forja-Device", "android"); c.setRequestProperty("X-Forja-Pairing-Key", relayKey); return c; }
-	private JSONObject encryptRelay(JSONObject body) throws Exception { byte[] iv = new byte[12]; new SecureRandom().nextBytes(iv); Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding"); cipher.init(Cipher.ENCRYPT_MODE, new SecretKeySpec(Base64.decode(relayEncryptionKey, Base64.URL_SAFE | Base64.NO_WRAP), "AES"), new GCMParameterSpec(128, iv)); cipher.updateAAD(relayInstallation.getBytes(StandardCharsets.UTF_8)); byte[] ciphertext = cipher.doFinal(body.toString().getBytes(StandardCharsets.UTF_8)); return new JSONObject().put("iv", Base64.encodeToString(iv, Base64.URL_SAFE | Base64.NO_WRAP)).put("ciphertext", Base64.encodeToString(ciphertext, Base64.URL_SAFE | Base64.NO_WRAP)); }
+	private JSONObject encryptRelay(JSONObject body) throws Exception { byte[] iv = new byte[12]; new SecureRandom().nextBytes(iv); Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding"); cipher.init(Cipher.ENCRYPT_MODE, new SecretKeySpec(Base64.decode(relayEncryptionKey, Base64.URL_SAFE | Base64.NO_WRAP), "AES"), new GCMParameterSpec(128, iv)); cipher.updateAAD(relayInstallation.getBytes(StandardCharsets.UTF_8)); byte[] ciphertext = cipher.doFinal(body.toString().getBytes(StandardCharsets.UTF_8)); return new JSONObject().put("iv", Base64.encodeToString(iv, Base64.URL_SAFE | Base64.NO_WRAP | Base64.NO_PADDING)).put("ciphertext", Base64.encodeToString(ciphertext, Base64.URL_SAFE | Base64.NO_WRAP | Base64.NO_PADDING)); }
 	private JSONObject decryptRelay(JSONObject packet) throws Exception { if (packet == null) throw new IOException("Respuesta remota inválida."); String iv = packet.optString("iv", ""), ciphertext = packet.optString("ciphertext", ""); if (iv.length() != 16 || ciphertext.length() < 24) throw new IOException("Respuesta remota inválida."); Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding"); cipher.init(Cipher.DECRYPT_MODE, new SecretKeySpec(Base64.decode(relayEncryptionKey, Base64.URL_SAFE | Base64.NO_WRAP), "AES"), new GCMParameterSpec(128, Base64.decode(iv, Base64.URL_SAFE | Base64.NO_WRAP))); cipher.updateAAD(relayInstallation.getBytes(StandardCharsets.UTF_8)); return new JSONObject(new String(cipher.doFinal(Base64.decode(ciphertext, Base64.URL_SAFE | Base64.NO_WRAP)), StandardCharsets.UTF_8)); }
 	private String latestSession(JSONObject space) throws JSONException { JSONArray sessions = space.optJSONArray("sessions"); return sessions != null && sessions.length() > 0 ? sessions.getJSONObject(0).getString("id") : ""; }
 	/** Secrets are encrypted with an Android Keystore AES key; plaintext values are migrated once. */
