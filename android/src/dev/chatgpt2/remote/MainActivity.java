@@ -6,6 +6,7 @@ import android.app.Dialog;
 import android.app.KeyguardManager;
 import android.content.Context;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.content.ContentValues;
 import android.net.Uri;
 import android.os.Build;
@@ -114,7 +115,14 @@ public final class MainActivity extends Activity {
 		relayInstallation = getPreferences(MODE_PRIVATE).getString("relayInstallation", ""); relayKey = loadSecret("relayKey");
 		relayEncryptionKey = loadSecret("relayEncryptionKey"); relayDeviceToken = loadSecret("relayDeviceToken");
         build();
-        if (connected()) { requestDeviceUnlock(); } else { showPairing(); }
+        if (connected()) { requestDeviceUnlock(); }
+        else {
+            showPairing();
+            // Diagnóstico: distinguir «el sistema borró la llave de seguridad» de «la app llegó sin datos» (instalación limpia o desinstalada antes).
+            SharedPreferences p = getPreferences(MODE_PRIVATE);
+            if (!p.getString("secret.relayDeviceToken", "").isEmpty() || !p.getString("relayInstallation", "").isEmpty()) setStatus("Se conservaron los datos pero el teléfono ya no puede leer las claves guardadas (borró la llave de seguridad). Escanea el QR otra vez. v" + versionLabel());
+            else setStatus("Sin emparejar (la app no tenía datos guardados: instalación nueva o desinstalada antes). v" + versionLabel());
+        }
         main.postDelayed(refreshLoop, 3500);
     }
 
@@ -199,6 +207,7 @@ public final class MainActivity extends Activity {
         setContentView(root);
     }
 
+    private String versionLabel() { try { return getPackageManager().getPackageInfo(getPackageName(), 0).versionName; } catch (Exception e) { return "?"; } }
     private void showPairing() { webMode = false; if (web != null) { web.setVisibility(View.GONE); web.loadUrl("about:blank"); webLoaded = false; } if (headerView != null) headerView.setVisibility(View.VISIBLE); if (rootView != null) rootView.setPadding(dp(16), dp(34), dp(16), dp(10)); pendingRelayResponses.clear(); pairingCard.setVisibility(View.VISIBLE); chatScroll.setVisibility(View.GONE); composerShell.setVisibility(View.GONE); connectionDot.setTextColor(MUTED); setProjectTitle(); }
     private void showChat() {
         pairingCard.setVisibility(View.GONE); chatScroll.setVisibility(View.GONE); composerShell.setVisibility(View.GONE); headerView.setVisibility(View.GONE);
@@ -220,6 +229,7 @@ public final class MainActivity extends Activity {
                 }
             });
         }
+        @android.webkit.JavascriptInterface public String version() { return versionLabel(); }
         @android.webkit.JavascriptInterface public void unpair() { runOnUiThread(() -> clearPairing()); }
         /** Guarda en Descargas/ChatGPT 2 un archivo o imagen que mandó la PC. */
         @android.webkit.JavascriptInterface public void saveFile(String name, String mime, String base64) {

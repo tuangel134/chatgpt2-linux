@@ -352,7 +352,7 @@ async function openModels() {
     });
   });
 }
-$("#moreBtn").addEventListener("click", () => sheet("Opciones", `<button class="opt" data-a="refresh">Actualizar</button><button class="opt" data-a="shot">Captura del escritorio</button><button class="opt" data-a="unpair" style="color:var(--red)">Desemparejar este teléfono</button>`, (b) => b.addEventListener("click", (e) => {
+$("#moreBtn").addEventListener("click", () => sheet("Opciones", `<button class="opt" data-a="refresh">Actualizar</button><button class="opt" data-a="shot">Captura del escritorio</button><div class="opt" style="color:var(--muted);font-size:13px">Versión de la app: ${window.Android && window.Android.version ? window.Android.version() : "web"}</div><button class="opt" data-a="unpair" style="color:var(--red)">Desemparejar este teléfono</button>`, (b) => b.addEventListener("click", (e) => {
   const a = e.target.closest("[data-a]"); if (!a) return; closeSheet();
   if (a.dataset.a === "refresh") reloadAll(); else if (a.dataset.a === "shot") shot(); else if (confirm("¿Desemparejar este teléfono?")) window.Android && window.Android.unpair();
 })));
