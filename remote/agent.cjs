@@ -301,7 +301,16 @@ async function messages(workspaceId, sessionId, limit) {
   return out.slice(-400);  // hilos muy largos (p. ej. automatizaciones): solo lo más reciente
 }
 
+let catalogSeen = 0;
+// El app-server lee el catálogo de modelos (hub-models.json) al arrancar: si cambió (modelos o proveedores nuevos), se reinicia para que el teléfono los vea.
+async function refreshCatalog() {
+  let m = 0; try { m = fs.statSync(path.join(CODEX_HOME, "hub-models.json")).mtimeMs; } catch { return; }
+  if (!catalogSeen) { catalogSeen = m; return; }
+  if (m <= catalogSeen || [...jobs.values()].some((j) => j.status === "running" && !j.owner)) return;
+  catalogSeen = m; loaded.clear(); codex.kill(); await new Promise((r) => setTimeout(r, 500));
+}
 async function models() {
+  await refreshCatalog();
   const r = await codex.call("model/list", { limit: 200 });
   let def = settings.model || "";
   if (!def) { try { const m = /^model\s*=\s*"([^"]+)"/m.exec(fs.readFileSync(path.join(CODEX_HOME, "config.toml"), "utf8")); if (m) def = m[1]; } catch {} }
