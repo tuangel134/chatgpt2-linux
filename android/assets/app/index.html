@@ -385,9 +385,12 @@ async function openModels() {
   const row = (m) => `<button class="opt" data-m="${esc(m.id)}" data-q="${esc((m.name + " " + m.id).toLowerCase())}"><span class="n">${esc(m.name)}<small>${esc(m.id)}${m.id === S.defModel ? " · predeterminado" : ""}</small></span>${m.id === cur ? '<span class="ck">✓</span>' : ""}</button>`;
   let h = '<input id="mq" placeholder="Buscar modelo" autocomplete="off" style="margin:4px 10px 6px;width:calc(100% - 20px);background:var(--surface2);border:0;border-radius:14px;padding:10px 14px;color:var(--text);font:inherit;outline:0">';
   if (efforts.length) h += `<div class="chips">${["", ...efforts].map((e) => `<button class="chip${(S.effort || "") === e ? " on" : ""}" data-e="${esc(e)}">${e ? "Razonamiento " + e : "Auto"}</button>`).join("")}</div>`;
-  h += sorted.map(row).join("");
+  const groupOf = (m) => m.id === "auto" ? "AUTO (respaldo por orden)" : /\(Antigravity\)/.test(m.name) ? "Antigravity" : /\(OpenCode Go\)/.test(m.name) ? "OpenCode Go" : /\(OpenCode Free\)/.test(m.name) ? "OpenCode Free" : /\(ChatGPT\)/.test(m.name) ? "ChatGPT" : /\(Claude\)/.test(m.name) ? "Claude" : "Tus APIs y otros";
+  const order = ["AUTO (respaldo por orden)", "OpenCode Go", "Antigravity", "OpenCode Free", "ChatGPT", "Claude", "Tus APIs y otros"], groups = {};
+  for (const m of sorted) (groups[groupOf(m)] = groups[groupOf(m)] || []).push(m);
+  for (const g of order) if (groups[g]) h += `<div class="sec" data-g="1">${esc(g)} · ${groups[g].length}</div>` + groups[g].map(row).join("");
   sheet("Modelo", h || '<div class="opt">No hay modelos disponibles</div>', (b) => {
-    b.querySelector("#mq").addEventListener("input", (e) => { const q = e.target.value.trim().toLowerCase(); b.querySelectorAll(".opt").forEach((o) => (o.style.display = !q || o.dataset.q.includes(q) ? "" : "none")); });
+    b.querySelector("#mq").addEventListener("input", (e) => { const q = e.target.value.trim().toLowerCase(); let head = null, any = false; for (const el of [...b.querySelectorAll(".opt,.sec")].concat([null])) { if (!el || el.classList.contains("sec")) { if (head) head.style.display = any || !q ? "" : "none"; head = el; any = false; continue; } const ok = !q || el.dataset.q.includes(q); el.style.display = ok ? "" : "none"; if (ok) any = true; } });
     b.addEventListener("click", (e) => {
       const ef = e.target.closest("[data-e]"); if (ef) { S.effort = ef.dataset.e; store.set("effort", S.effort); paintTop(); openModels(); return; }
       const o = e.target.closest("[data-m]"); if (o) { S.model = o.dataset.m === S.defModel ? "" : o.dataset.m; store.set("model", S.model); S.effort = ""; store.set("effort", ""); paintTop(); closeSheet(); }
