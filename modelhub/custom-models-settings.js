@@ -49,6 +49,8 @@ function h(tag, props, ...kids) {
 const S = {
   input: { background: "transparent", color: "inherit", border: BORDER, borderRadius: "8px", padding: "6px 10px", font: "inherit", fontSize: "13px", minWidth: "0", width: "100%", boxSizing: "border-box" },
   btn: { background: "transparent", color: "inherit", border: BORDER, borderRadius: "8px", padding: "6px 12px", font: "inherit", fontSize: "13px", cursor: "pointer" },
+  // Los desplegables nativos pintan la lista con fondo claro: se fuerza fondo y texto del esquema de color (si no, texto claro sobre blanco).
+  sel: { background: "Canvas", color: "CanvasText", colorScheme: "light dark", border: BORDER, borderRadius: "8px", padding: "6px 12px", font: "inherit", fontSize: "13px", cursor: "pointer" },
   primary: { background: "#2563eb", color: "#fff", border: "1px solid #2563eb", borderRadius: "8px", padding: "7px 14px", font: "inherit", fontSize: "13px", cursor: "pointer" },
   card: { background: CARD, border: BORDER, borderRadius: "12px", padding: "14px", display: "flex", flexDirection: "column", gap: "10px" },
   muted: { opacity: ".65", fontSize: "12px" },
@@ -75,15 +77,15 @@ function mount(root) {
   const goBox = h("div", { style: { ...S.card } });
   const remoteBox = h("div", { style: { ...S.card } });
   const remote = { st: null, devices: [], err: "", qrDevices: null, busy: false };
-  const defaultSel = h("select", { style: { ...S.btn, maxWidth: "420px" }, onChange: async (e) => {
+  const defaultSel = h("select", { style: { ...S.sel, maxWidth: "420px" }, onChange: async (e) => {
     try { await api("PUT", "/default-model", { slug: e.target.value }); await applyNow("Modelo principal cambiado."); } catch (err) { say("Error: " + err.message, true); }
   } });
-  const routingSel = h("select", { style: { ...S.btn }, onChange: async (e) => {
+  const routingSel = h("select", { style: { ...S.sel }, onChange: async (e) => {
     try { await api("PUT", "/routing", { strategy: e.target.value }); state.routing = e.target.value; await applyNow("Reparto cambiado."); } catch (err) { say("Error: " + err.message, true); }
   } }, h("option", { value: "round-robin" }, "Repartir entre las cuentas (turnos)"), h("option", { value: "fill-first" }, "Agotar una cuenta y pasar a la siguiente"));
   const autoBox = h("div", { style: { display: "flex", flexDirection: "column", gap: "6px" } });
   const autoLastEl = h("div", { style: S.muted });
-  const autoSelect = h("select", { style: { ...S.btn, alignSelf: "flex-start" }, onChange: (e) => {
+  const autoSelect = h("select", { style: { ...S.sel, alignSelf: "flex-start" }, onChange: (e) => {
     const m = e.target.value; e.target.value = "";
     if (m && !state.auto.includes(m)) { state.auto.push(m); dirty = true; paint(); }
   } });
@@ -133,10 +135,10 @@ function mount(root) {
       if (!relayUrl) return say("Escribe la URL de tu relay (ver el README: se despliega con un Worker de Cloudflare).", true);
       try { remote.qrDevices = cfg ? remote.devices.length : 0; await remoteDo("start", { relayUrl }); } catch (e) { say("Error: " + e.message, true); }
     };
-    const modelSel = h("select", { style: { ...S.btn, maxWidth: "380px" }, onChange: (e) => remoteDo("settings", { model: e.target.value }, "Modelo del teléfono cambiado.") },
+    const modelSel = h("select", { style: { ...S.sel, maxWidth: "380px" }, onChange: (e) => remoteDo("settings", { model: e.target.value }, "Modelo del teléfono cambiado.") },
       h("option", { value: "" }, "El predeterminado de Codex"), ...state.catalog.map((m) => h("option", { value: m.slug }, m.name)));
     modelSel.value = (st && st.settings && st.settings.model) || "";
-    const permSel = h("select", { style: { ...S.btn, maxWidth: "380px" }, onChange: (e) => remoteDo("settings", { permission: e.target.value }, "Permiso del teléfono cambiado.") },
+    const permSel = h("select", { style: { ...S.sel, maxWidth: "380px" }, onChange: (e) => remoteDo("settings", { permission: e.target.value }, "Permiso del teléfono cambiado.") },
       h("option", { value: "read-only" }, "Solo lectura (no modifica nada)"), h("option", { value: "workspace-write" }, "Escribir en la carpeta del proyecto (recomendado)"), h("option", { value: "danger-full-access" }, "Acceso completo (peligroso)"));
     permSel.value = (st && st.settings && st.settings.permission) || "workspace-write";
     const canvas = h("canvas", { style: { width: "220px", height: "220px", imageRendering: "pixelated", borderRadius: "10px", background: "#fff" } });
@@ -287,7 +289,7 @@ function mount(root) {
     } catch (e) { say("Error: " + e.message, true); }
   }
 
-  async function save() {
+  async function save(restart) {
     say("Guardando…");
     try {
       await api("PUT", "/auto", { models: state.auto });
@@ -295,6 +297,7 @@ function mount(root) {
       dirty = false;
       await applyNow("Guardado.");
       await refresh(false);
+      if (restart === true) { say("Reiniciando ChatGPT 2…"); await api("POST", "/restart"); }
     } catch (e) { say("Error: " + e.message, true); }
   }
 
@@ -321,7 +324,7 @@ function mount(root) {
     return b;
   }
 
-  const tplSelect = h("select", { style: { ...S.btn }, onChange: (e) => {
+  const tplSelect = h("select", { style: { ...S.sel }, onChange: (e) => {
     const i = Number(e.target.value); e.target.value = "";
     if (Number.isNaN(i)) return;
     const t = TEMPLATES[i];
@@ -359,7 +362,8 @@ function mount(root) {
         h("h2", { style: S.h2 }, "Generación de imágenes (Gemini)"), imageBox,
         h("div", { style: S.muted }, "Cualquier modelo del clon puede pedir imágenes con la herramienta «generate_image» (también edita con imágenes de referencia y elige relación de aspecto). Las guarda en ~/.codex-2/generated_images/gemini/. Si la cuota de la cuenta se agota, la herramienta avisa cuándo se restablece.")),
       h("div", { style: { display: "flex", flexWrap: "wrap", gap: "10px", alignItems: "center" } },
-        h("button", { style: S.primary, onClick: save }, "Guardar y aplicar"),
+        h("button", { style: S.primary, onClick: () => save() }, "Guardar y aplicar"),
+        h("button", { style: S.primary, onClick: () => save(true) }, "Guardar, aplicar y reiniciar"),
         h("button", { style: S.btn, onClick: async () => { try { await api("POST", "/restart"); say("Reiniciando…"); } catch (e) { say(e.message, true); } } }, "Reiniciar ChatGPT 2"),
         h("button", { style: S.btn, onClick: () => refresh(false) }, "Recargar")),
       msgEl, restartNow));

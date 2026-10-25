@@ -87,6 +87,7 @@ def main():
     if not cgw_token_file.exists():
         cgw_token_file.write_text(secrets.token_hex(24)); cgw_token_file.chmod(0o600)
     s = s.rstrip("\n") + "\n" + (HUB / "chatgpt_web_overlay.js").read_text().replace("__CGW_TOKEN__", cgw_token_file.read_text().strip())
+    s = s.rstrip("\n") + "\n" + (HUB / "model_picker_overlay.js").read_text()   # selector de modelos con buscador y grupos
     init.write_text(s)
     es = next(f for f in A.glob("es-ES-*.js") if "sidebarElectron.productMode.chatGptWork.unavailable" in f.read_text())
     e = es.read_text()
